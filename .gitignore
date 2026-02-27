@@ -1,0 +1,14 @@
+# Secret config — never commit this
+include/config.h
+
+# PlatformIO build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
