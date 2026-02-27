@@ -1,43 +1,72 @@
 /*
- * ESP32_Relay_X8_Modbus  –  WiFi / MQTT Firmware
+ * ESP32_Relay_X8_Modbus  –  WiFi / MQTT / OTA / Web Dashboard Firmware
  * Board model : 303E32DC812
  * Framework   : Arduino / PlatformIO
  *
  * CONFIRMED HARDWARE (from pin scanner):
  *   74HC595 shift register:
  *     LATCH = GPIO25, CLOCK = GPIO26, DATA = GPIO33, OE = GPIO13
- *   Bit order: bit0=relay1 … bit6=relay7, bit1=relay8 (shared with relay2)
+ *
+ * Web dashboard : http://<board-ip>/
+ * OTA update    : http://<board-ip>/update  or via PlatformIO upload_port
  *
  * Setup: copy include/config.example.h to include/config.h and fill in values.
  */
 
 #include <Arduino.h>
-#include <Wire.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
-#include "config.h"   // ← git-ignored, never committed
+#include <WebServer.h>
+#include <ArduinoOTA.h>
+#include <LittleFS.h>
+#include "config.h"
 
 // ─────────────────────────────────────────────
-//  Hardware — CONFIRMED by pin scanner
+//  Hardware
 // ─────────────────────────────────────────────
 #define PIN_LATCH    25
 #define PIN_CLOCK    26
 #define PIN_DATA     33
 #define PIN_OE       13
 
-// Digital inputs (IN1–IN8, active-LOW, direct GPIO)
 const int8_t INPUT_PINS[8] = {36, 39, 34, 35, 4, 16, 17, 5};
 #define INPUTS_ENABLED true
 
 // ─────────────────────────────────────────────
 //  Constants
 // ─────────────────────────────────────────────
-#define MAX_SCHEDULES    16
-#define NTP_SERVER       "pool.ntp.org"
-#define DEFAULT_PULSE_MS 0
+#define MAX_SCHEDULES     16
+#define NTP_SERVER        "pool.ntp.org"
+#define DEFAULT_PULSE_MS  0
+#define LOG_BUFFER_LINES  80      // circular log shown in web UI
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Serial log ring buffer — captures Serial output for the web UI
+// ─────────────────────────────────────────────────────────────────────────────
+
+String logLines[LOG_BUFFER_LINES];
+int    logHead = 0;        // next write position
+int    logCount = 0;       // how many lines stored so far
+
+void logPush(const String& line) {
+    logLines[logHead] = line;
+    logHead = (logHead + 1) % LOG_BUFFER_LINES;
+    if (logCount < LOG_BUFFER_LINES) logCount++;
+    Serial.println(line);
+}
+
+// Printf-style helper that also pushes to ring buffer
+void logf(const char* fmt, ...) {
+    char buf[256];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    logPush(String(buf));
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Globals
@@ -47,6 +76,7 @@ WiFiClient   wifiClient;
 PubSubClient mqtt(wifiClient);
 WiFiUDP      ntpUDP;
 NTPClient    ntp(ntpUDP, NTP_SERVER, NTP_UTC_OFFSET, 60000);
+WebServer    webServer(80);
 
 uint8_t  relayBits      = 0x00;
 uint32_t pulseMs[8]     = {DEFAULT_PULSE_MS};
@@ -75,6 +105,45 @@ uint32_t lastMqttCheck = 0;
 #define  WIFI_RETRY_MS 5000
 #define  MQTT_RETRY_MS 3000
 
+bool apActive = AP_DEFAULT;
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Access Point control
+// ─────────────────────────────────────────────────────────────────────────────
+
+void apStart() {
+    // Switch to AP+STA only if not already in that mode
+    // Avoids dropping the existing STA connection
+    if (WiFi.getMode() != WIFI_AP_STA) {
+        WiFi.mode(WIFI_AP_STA);
+    }
+    bool ok;
+    if (strlen(AP_PASSWORD) >= 8) {
+        ok = WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL);
+    } else {
+        ok = WiFi.softAP(AP_SSID);
+    }
+    if (ok) {
+        apActive = true;
+        logf("[AP] Started — SSID: %s  IP: %s", AP_SSID, WiFi.softAPIP().toString().c_str());
+    } else {
+        logf("[AP] Failed to start!");
+    }
+}
+
+void apStop() {
+    WiFi.softAPdisconnect(true);
+    // Keep WIFI_STA mode — don't call WiFi.mode(WIFI_STA) as it resets the STA connection
+    apActive = false;
+    logf("[AP] Stopped");
+}
+
+void publishApState() {
+    if (mqtt.connected())
+        mqtt.publish((String(MQTT_ROOT) + "/ap/state").c_str(),
+                     apActive ? "ON" : "OFF", true);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Shift register
 // ─────────────────────────────────────────────────────────────────────────────
@@ -86,7 +155,7 @@ void writeRelays() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Helpers
+//  Relay helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 String relayTopic(int idx, const char* suffix) {
@@ -107,7 +176,7 @@ void setRelay(int idx, bool on, uint32_t pulse = 0) {
     else    relayBits &= ~(1 << idx);
     writeRelays();
     if (mqtt.connected()) publishRelayState(idx);
-    Serial.printf("[RELAY] %d → %s  (reg=0x%02X)\n", idx+1, on?"ON":"OFF", relayBits);
+    logf("[RELAY] %d → %s  (reg=0x%02X)", idx+1, on?"ON":"OFF", relayBits);
     if (on && pulse > 0) {
         pulseMs[idx] = pulse; pulseStart[idx] = millis(); pulseActive[idx] = true;
     } else if (!on) {
@@ -118,6 +187,218 @@ void setRelay(int idx, bool on, uint32_t pulse = 0) {
 void toggleRelay(int idx, uint32_t pulse = 0) { setRelay(idx, !getRelay(idx), pulse); }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Web dashboard HTML (served from flash, not SPIFFS — keeps it simple)
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Web server routes
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Read current digital input byte
+uint8_t readInputByte() {
+    uint8_t val = 0;
+    for (int i = 0; i < 8; i++) {
+        if (INPUT_PINS[i] >= 0 && inputState[i]) val |= (1 << i);
+    }
+    return val;
+}
+
+void setupWebServer() {
+
+    // ── Dashboard — served from LittleFS /index.html ──────────────────────
+    webServer.on("/", HTTP_GET, []() {
+        File f = LittleFS.open("/index.html", "r");
+        if (!f) {
+            webServer.send(500, "text/plain",
+                "index.html not found.\nRun: pio run -t uploadfs");
+            return;
+        }
+        webServer.streamFile(f, "text/html");
+        f.close();
+    });
+
+    // ── GET /relay?ch=1&action=ON|OFF|TOGGLE ──────────────────────────────
+    webServer.on("/relay", HTTP_GET, []() {
+        if (!webServer.hasArg("ch") || !webServer.hasArg("action")) {
+            webServer.send(400, "application/json", "{\"error\":\"missing ch or action\"}");
+            return;
+        }
+        int idx = webServer.arg("ch").toInt() - 1;
+        String action = webServer.arg("action");
+        if (idx < 0 || idx > 7) {
+            webServer.send(400, "application/json", "{\"error\":\"ch out of range\"}");
+            return;
+        }
+        if      (action == "ON")     setRelay(idx, true);
+        else if (action == "OFF")    setRelay(idx, false);
+        else if (action == "TOGGLE") toggleRelay(idx);
+        String resp = "{\"relay\":" + String(idx+1) + ",\"state\":\"" + (getRelay(idx)?"ON":"OFF") + "\"}";
+        webServer.send(200, "application/json", resp);
+    });
+
+    // ── GET /relay/all?action=ON|OFF ──────────────────────────────────────
+    webServer.on("/relay/all", HTTP_GET, []() {
+        String action = webServer.arg("action");
+        bool on = (action == "ON");
+        relayBits = on ? 0xFF : 0x00;
+        writeRelays();
+        if (mqtt.connected()) for (int i = 0; i < 8; i++) publishRelayState(i);
+        logf("[WEB] All relays → %s", on ? "ON" : "OFF");
+        webServer.send(200, "application/json", "{\"state\":\"" + action + "\"}");
+    });
+
+    // ── GET /api/state — returns JSON with relay bits, input bits, mqtt, ip ─
+    webServer.on("/api/state", HTTP_GET, []() {
+        JsonDocument doc;
+        doc["relays"] = relayBits;
+        doc["inputs"] = readInputByte();
+        doc["mqtt"]   = mqtt.connected();
+        doc["ip"]     = WiFi.localIP().toString();
+        doc["ap"]     = apActive;
+        doc["ap_ip"]  = apActive ? WiFi.softAPIP().toString() : "";
+        doc["ap_ssid"]= AP_SSID;
+        doc["uptime"] = millis() / 1000;
+        String out;
+        serializeJson(doc, out);
+        webServer.send(200, "application/json", out);
+    });
+
+    // ── GET /api/log?since=N — returns new log lines since sequence N ──────
+    webServer.on("/api/log", HTTP_GET, []() {
+        int since = webServer.hasArg("since") ? webServer.arg("since").toInt() : 0;
+        JsonDocument doc;
+        JsonArray arr = doc["lines"].to<JsonArray>();
+
+        // Walk ring buffer in chronological order
+        int total = logCount;
+        int start = (logCount < LOG_BUFFER_LINES) ? 0 : logHead;
+        for (int i = 0; i < total; i++) {
+            int globalIdx = (logCount < LOG_BUFFER_LINES)
+                ? i
+                : (logCount - LOG_BUFFER_LINES) + i;
+            if (globalIdx < since) continue;
+            int bufIdx = (start + i) % LOG_BUFFER_LINES;
+            arr.add(logLines[bufIdx]);
+        }
+        doc["total"] = logCount;
+
+        String out;
+        serializeJson(doc, out);
+        webServer.send(200, "application/json", out);
+    });
+
+    // ── GET /api/log/clear ─────────────────────────────────────────────────
+    webServer.on("/api/log/clear", HTTP_GET, []() {
+        logHead = 0; logCount = 0;
+        webServer.send(200, "application/json", "{\"ok\":true}");
+    });
+
+    // ── OTA update page (simple file upload, password protected) ──────────
+    webServer.on("/update", HTTP_GET, []() {
+        if (strlen(OTA_PASSWORD) > 0 &&
+            !webServer.authenticate(OTA_USERNAME, OTA_PASSWORD)) {
+            return webServer.requestAuthentication(BASIC_AUTH, "OTA Update", "Unauthorized");
+        }
+        webServer.send(200, "text/html",
+            "<html><body style='background:#0a0e14;color:#c0cfe0;font-family:monospace;padding:40px'>"
+            "<h2 style='color:#00d4ff'>OTA Firmware Update</h2>"
+            "<form method='POST' action='/update' enctype='multipart/form-data'>"
+            "<input type='file' name='firmware' accept='.bin' style='margin:20px 0;display:block'>"
+            "<input type='submit' value='Upload & Flash' "
+            "style='background:#00d4ff;color:#0a0e14;border:none;padding:10px 24px;"
+            "font-family:monospace;font-size:1rem;cursor:pointer;border-radius:4px'>"
+            "</form></body></html>"
+        );
+    });
+
+    webServer.on("/update", HTTP_POST,
+        []() {
+            if (strlen(OTA_PASSWORD) > 0 &&
+                !webServer.authenticate(OTA_USERNAME, OTA_PASSWORD)) {
+                return webServer.requestAuthentication(BASIC_AUTH, "OTA Update", "Unauthorized");
+            }
+            bool ok = !Update.hasError();
+            webServer.send(200, "text/html",
+                ok ? "<html><body style='background:#0a0e14;color:#00ff88;font-family:monospace;padding:40px'>"
+                     "<h2>✓ Update successful — rebooting…</h2></body></html>"
+                   : "<html><body style='background:#0a0e14;color:#ff3860;font-family:monospace;padding:40px'>"
+                     "<h2>✗ Update FAILED</h2></body></html>"
+            );
+            if (ok) { delay(500); ESP.restart(); }
+        },
+        []() {
+            HTTPUpload& upload = webServer.upload();
+            if (upload.status == UPLOAD_FILE_START) {
+                logf("[OTA] Web upload: %s (%u bytes)", upload.filename.c_str(), upload.totalSize);
+                if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+                    logf("[OTA] Begin failed: %s", Update.errorString());
+                }
+            } else if (upload.status == UPLOAD_FILE_WRITE) {
+                if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+                    logf("[OTA] Write error: %s", Update.errorString());
+                }
+            } else if (upload.status == UPLOAD_FILE_END) {
+                if (Update.end(true)) {
+                    logf("[OTA] Upload complete: %u bytes — flashing…", upload.totalSize);
+                } else {
+                    logf("[OTA] End failed: %s", Update.errorString());
+                }
+            }
+        }
+    );
+
+    // ── GET /ap?action=ON|OFF ──────────────────────────────────────────────
+    webServer.on("/ap", HTTP_GET, []() {
+        String action = webServer.arg("action");
+        if (action == "ON" && !apActive)       apStart();
+        else if (action == "OFF" && apActive)  apStop();
+        String resp = "{\"active\":" + String(apActive ? "true" : "false") +
+                      ",\"ip\":\"192.168.4.1\",\"ssid\":\"" + String(AP_SSID) + "\"}";
+        webServer.send(200, "application/json", resp);
+    });
+
+    webServer.begin();
+    logf("[WEB] Server started at http://%s/", WiFi.localIP().toString().c_str());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  OTA (ArduinoOTA — for PlatformIO upload_port / IDE upload)
+// ─────────────────────────────────────────────────────────────────────────────
+
+void setupOTA() {
+    ArduinoOTA.setHostname(OTA_HOSTNAME);
+    if (strlen(OTA_PASSWORD) > 0) {
+        ArduinoOTA.setPassword(OTA_PASSWORD);
+        logf("[OTA] Password protection enabled");
+    } else {
+        logf("[OTA] WARNING: No OTA password set — anyone on the network can update!");
+    }
+
+    ArduinoOTA.onStart([]() {
+        logf("[OTA] Starting update: %s",
+             ArduinoOTA.getCommand() == U_FLASH ? "firmware" : "filesystem");
+    });
+    ArduinoOTA.onEnd([]()   { logf("[OTA] Done — rebooting"); });
+    ArduinoOTA.onProgress([](unsigned int p, unsigned int t) {
+        static int lastPct = -1;
+        int pct = (p * 100) / t;
+        if (pct != lastPct && pct % 10 == 0) { lastPct = pct; logf("[OTA] %d%%", pct); }
+    });
+    ArduinoOTA.onError([](ota_error_t e) {
+        logf("[OTA] Error[%u]: %s", e,
+             e==OTA_AUTH_ERROR    ? "Auth failed"    :
+             e==OTA_BEGIN_ERROR   ? "Begin failed"   :
+             e==OTA_CONNECT_ERROR ? "Connect failed" :
+             e==OTA_RECEIVE_ERROR ? "Receive failed" :
+             e==OTA_END_ERROR     ? "End failed"     : "Unknown");
+    });
+
+    ArduinoOTA.begin();
+    logf("[OTA] ArduinoOTA ready — hostname: %s.local", OTA_HOSTNAME);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  MQTT callback
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -126,10 +407,24 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     String msg;
     for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
     msg.trim();
-    Serial.printf("[MQTT IN] %s → %s\n", topic, msg.c_str());
+    logf("[MQTT IN] %s → %s", topic, msg.c_str());
+
+    // ap/set
+    if (t == String(MQTT_ROOT) + "/ap/set") {
+        if (msg == "ON" && !apActive) {
+            apStart();
+            publishApState();
+        } else if (msg == "OFF" && apActive) {
+            apStop();
+            publishApState();
+        }
+        return;
+    }
 
     if (t == String(MQTT_ROOT) + "/schedule/clear") {
-        scheduleCount = 0; return;
+        scheduleCount = 0;
+        logf("[SCHED] Cleared");
+        return;
     }
 
     if (t == String(MQTT_ROOT) + "/schedule/set") {
@@ -151,7 +446,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
             s.firedToday = false;
             scheduleCount++;
         }
-        Serial.printf("[SCHED] Loaded %d entries\n", scheduleCount);
+        logf("[SCHED] Loaded %d entries", scheduleCount);
         return;
     }
 
@@ -191,38 +486,52 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
 void connectWifi() {
     if (WiFi.status() == WL_CONNECTED) return;
-    Serial.printf("[WiFi] Connecting to %s", WIFI_SSID);
-    WiFi.mode(WIFI_STA);
+    logf("[WiFi] Connecting to %s…", WIFI_SSID);
+
+    // Always use AP_STA if AP is active so it survives the reconnect
+    WiFi.mode(apActive ? WIFI_AP_STA : WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
     uint32_t t = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - t < 10000) {
         delay(250); Serial.print('.');
     }
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("\n[WiFi] IP: %s\n", WiFi.localIP().toString().c_str());
+        logf("[WiFi] Connected. IP: %s", WiFi.localIP().toString().c_str());
         ntp.begin();
+        setupOTA();
+        setupWebServer();
+
+        // Re-raise AP if it was active before the reconnect — WiFi.begin()
+        // can silently drop the soft-AP on some SDK versions
+        if (apActive) {
+            logf("[AP] Restoring AP after WiFi reconnect…");
+            apStart();
+        }
     } else {
-        Serial.println("\n[WiFi] Failed – retrying");
+        logf("[WiFi] Failed – will retry in %ds", WIFI_RETRY_MS/1000);
     }
 }
 
 void connectMqtt() {
     if (mqtt.connected()) return;
-    Serial.printf("[MQTT] Connecting to %s:%d … ", MQTT_BROKER, MQTT_PORT);
+    logf("[MQTT] Connecting to %s:%d…", MQTT_BROKER, MQTT_PORT);
     String lwt = String(MQTT_ROOT) + "/status";
     bool ok = (strlen(MQTT_USER) > 0)
         ? mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD, lwt.c_str(), 0, true, "offline")
         : mqtt.connect(MQTT_CLIENT_ID, nullptr, nullptr, lwt.c_str(), 0, true, "offline");
     if (ok) {
-        Serial.println("OK");
+        logf("[MQTT] Connected OK");
         mqtt.publish(lwt.c_str(), "online", true);
         mqtt.subscribe((String(MQTT_ROOT) + "/relay/+/set").c_str());
         mqtt.subscribe((String(MQTT_ROOT) + "/relay/all/set").c_str());
         mqtt.subscribe((String(MQTT_ROOT) + "/schedule/set").c_str());
         mqtt.subscribe((String(MQTT_ROOT) + "/schedule/clear").c_str());
+        mqtt.subscribe((String(MQTT_ROOT) + "/ap/set").c_str());
         for (int i = 0; i < 8; i++) publishRelayState(i);
+        publishApState();
     } else {
-        Serial.printf("FAIL rc=%d\n", mqtt.state());
+        logf("[MQTT] FAILED rc=%d", mqtt.state());
     }
 }
 
@@ -248,7 +557,7 @@ void runSchedules() {
         else if (s.action == 1) setRelay(s.relay, true, s.pulseMs);
         else                    toggleRelay(s.relay, s.pulseMs);
         s.firedToday = true;
-        Serial.printf("[SCHED] Fired entry %d → relay %d\n", i, s.relay+1);
+        logf("[SCHED] Fired entry %d → relay %d", i, s.relay+1);
     }
 }
 
@@ -258,7 +567,17 @@ void runSchedules() {
 
 void setup() {
     Serial.begin(115200);
-    Serial.println("\n[BOOT] ESP32_Relay_X8 firmware starting");
+    logf("[BOOT] ESP32_Relay_X8 firmware starting");
+    logf("[BOOT] Board: 303E32DC812");
+
+    if (!LittleFS.begin(true)) {
+        logf("[ERROR] LittleFS mount failed!");
+    } else {
+        logf("[OK] LittleFS mounted");
+        File f = LittleFS.open("/index.html", "r");
+        if (f) { logf("[OK] index.html found (%d bytes)", f.size()); f.close(); }
+        else    { logf("[WARN] index.html not found — run: pio run -t uploadfs"); }
+    }
 
     pinMode(PIN_LATCH, OUTPUT);
     pinMode(PIN_CLOCK, OUTPUT);
@@ -269,7 +588,7 @@ void setup() {
     digitalWrite(PIN_OE,    LOW);
     relayBits = 0x00;
     writeRelays();
-    Serial.println("[OK] All relays OFF");
+    logf("[OK] Shift register init — all relays OFF");
 
     if (INPUTS_ENABLED) {
         for (int i = 0; i < 8; i++) {
@@ -279,31 +598,47 @@ void setup() {
                 inputState[i]   = inputLastRaw[i];
             }
         }
+        logf("[OK] Digital inputs configured");
     }
 
     mqtt.setServer(MQTT_BROKER, MQTT_PORT);
     mqtt.setCallback(mqttCallback);
     mqtt.setBufferSize(1024);
+
     connectWifi();
     connectMqtt();
+
+    if (AP_DEFAULT) {
+        apStart();
+    }
 }
 
 void loop() {
     uint32_t now = millis();
 
-    if (now - lastWifiCheck > WIFI_RETRY_MS) { lastWifiCheck = now; connectWifi(); }
+    ArduinoOTA.handle();
+    webServer.handleClient();
+
+    if (now - lastWifiCheck > WIFI_RETRY_MS) {
+        lastWifiCheck = now;
+        connectWifi();
+    }
     if (WiFi.status() == WL_CONNECTED && now - lastMqttCheck > MQTT_RETRY_MS) {
-        lastMqttCheck = now; connectMqtt();
+        lastMqttCheck = now;
+        connectMqtt();
     }
     mqtt.loop();
     ntp.update();
 
+    // Pulse / auto-off
     for (int i = 0; i < 8; i++) {
         if (pulseActive[i] && (now - pulseStart[i] >= pulseMs[i])) {
-            setRelay(i, false); pulseActive[i] = false;
+            setRelay(i, false);
+            pulseActive[i] = false;
         }
     }
 
+    // Digital inputs (debounced)
     if (INPUTS_ENABLED) {
         for (int i = 0; i < 8; i++) {
             if (INPUT_PINS[i] < 0) continue;
@@ -313,11 +648,15 @@ void loop() {
                 inputState[i] = raw;
                 if (mqtt.connected())
                     mqtt.publish(inputTopic(i).c_str(), raw ? "ON" : "OFF", false);
-                Serial.printf("[IN] Input %d → %s\n", i+1, raw?"ON":"OFF");
+                logf("[IN] Input %d → %s", i+1, raw?"ON":"OFF");
             }
         }
     }
 
+    // Schedule engine
     static uint32_t lastSchedCheck = 0;
-    if (now - lastSchedCheck >= 1000) { lastSchedCheck = now; runSchedules(); }
+    if (now - lastSchedCheck >= 1000) {
+        lastSchedCheck = now;
+        runSchedules();
+    }
 }

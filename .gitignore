@@ -1,7 +1,7 @@
-# Secret config — never commit this
+# Secret config — never commit
 include/config.h
 
-# PlatformIO build artifacts
+# PlatformIO
 .pio/
 .pioenvs/
 .piolibdeps/
@@ -9,6 +9,6 @@ include/config.h
 # VS Code
 .vscode/
 
-# OS files
+# OS
 .DS_Store
 Thumbs.db

@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relay Board</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
+
+  :root {
+    --bg:       #0a0e14;
+    --panel:    #111820;
+    --border:   #1e2d3d;
+    --accent:   #00d4ff;
+    --green:    #00ff88;
+    --red:      #ff3860;
+    --yellow:   #ffcc00;
+    --text:     #c0cfe0;
+    --dim:      #3a4a5a;
+    --mono:     'Share Tech Mono', monospace;
+    --ui:       'Rajdhani', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ui);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.08) 2px,
+      rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 999;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 28px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+
+  .logo {
+    font-family: var(--mono);
+    font-size: 1.1rem;
+    color: var(--accent);
+    letter-spacing: 2px;
+  }
+  .logo span { color: var(--dim); }
+
+  .status-bar {
+    display: flex;
+    gap: 20px;
+    font-size: 0.78rem;
+    font-family: var(--mono);
+    color: var(--dim);
+  }
+  .status-bar .dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    margin-right: 5px;
+    background: var(--dim);
+  }
+  .status-bar .dot.on  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-bar .dot.off { background: var(--red); }
+
+  main {
+    flex: 1;
+    padding: 24px 28px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 20px;
+  }
+
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+  }
+
+  h2 {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 3px;
+    color: var(--dim);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+
+  /* ── Relay grid ───────────────────────────── */
+  .relay-section { grid-column: 1 / -1; }
+
+  .relay-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  @media (max-width: 700px) {
+    .relay-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  .relay-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 14px 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    transition: border-color 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+  .relay-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--dim);
+    transition: background 0.3s;
+  }
+  .relay-card.on { border-color: var(--green); }
+  .relay-card.on::before { background: var(--green); box-shadow: 0 0 8px var(--green); }
+
+  .relay-label {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--dim);
+    letter-spacing: 2px;
+  }
+
+  .relay-num {
+    font-family: var(--mono);
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1;
+  }
+  .relay-card.on .relay-num { color: var(--green); text-shadow: 0 0 12px var(--green); }
+
+  .relay-state {
+    font-size: 0.75rem;
+    font-family: var(--mono);
+    letter-spacing: 2px;
+    color: var(--dim);
+  }
+  .relay-card.on .relay-state { color: var(--green); }
+
+  .btn-row {
+    display: flex;
+    gap: 6px;
+    width: 100%;
+  }
+
+  .btn {
+    flex: 1;
+    border: none;
+    border-radius: 4px;
+    padding: 7px 0;
+    font-family: var(--ui);
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn-on  { background: rgba(0,255,136,0.12); color: var(--green); border: 1px solid rgba(0,255,136,0.3); }
+  .btn-off { background: rgba(255,56,96,0.12);  color: var(--red);   border: 1px solid rgba(255,56,96,0.3);  }
+  .btn-tog { background: rgba(0,212,255,0.1);   color: var(--accent);border: 1px solid rgba(0,212,255,0.25); flex: 0.8; }
+
+  .btn:hover { filter: brightness(1.4); transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+
+  /* ── All relays bar ───────────────────────── */
+  .all-bar {
+    grid-column: 1 / -1;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .all-bar span {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--dim);
+    letter-spacing: 2px;
+    flex: 1;
+  }
+  .btn-all-on, .btn-all-off {
+    padding: 8px 24px;
+    font-size: 0.85rem;
+  }
+
+  /* ── Input section ────────────────────────── */
+  .input-section { }
+
+  .input-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+
+  .input-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .input-card.on { border-color: var(--yellow); }
+
+  .input-dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: var(--dim);
+  }
+  .input-card.on .input-dot {
+    background: var(--yellow);
+    box-shadow: 0 0 8px var(--yellow);
+  }
+
+  .input-lbl {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--dim);
+    letter-spacing: 1px;
+  }
+  .input-card.on .input-lbl { color: var(--yellow); }
+
+  /* ── Log section ──────────────────────────── */
+  .log-section { display: flex; flex-direction: column; }
+
+  #log {
+    flex: 1;
+    background: #070b10;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    line-height: 1.7;
+    color: #6a8a9a;
+    overflow-y: auto;
+    height: 280px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  #log .log-relay  { color: var(--green); }
+  #log .log-mqtt   { color: var(--accent); }
+  #log .log-wifi   { color: var(--yellow); }
+  #log .log-error  { color: var(--red); }
+  #log .log-sched  { color: #c084fc; }
+  #log .log-boot   { color: var(--text); }
+
+  .log-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+  .log-controls label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    color: var(--dim);
+    cursor: pointer;
+    font-family: var(--mono);
+  }
+  .btn-clear-log {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--dim);
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    cursor: pointer;
+  }
+  .btn-clear-log:hover { color: var(--text); border-color: var(--dim); }
+
+  /* ── OTA bar ──────────────────────────────── */
+  footer {
+    padding: 12px 28px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 0.75rem;
+    font-family: var(--mono);
+    color: var(--dim);
+  }
+  footer a {
+    color: var(--accent);
+    text-decoration: none;
+    letter-spacing: 1px;
+  }
+  footer a:hover { text-decoration: underline; }
+  .ip-badge {
+    margin-left: auto;
+    color: var(--dim);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Irrigation<span> </span>controller</div>
+  <div class="status-bar">
+    <div id="mqtt-status"><span class="dot" id="mqtt-dot"></span><span id="mqtt-label">MQTT</span></div>
+    <div id="wifi-status"><span class="dot on"></span>WiFi</div>
+    <div id="ap-status" style="cursor:pointer" onclick="toggleAP()" title="Click to toggle AP">
+      <span class="dot" id="ap-dot"></span><span id="ap-label">AP OFF</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- All relays bar -->
+  <div class="all-bar" style="grid-column:1/-1; margin-bottom:4px;">
+    <span>ALL RELAYS</span>
+    <button class="btn btn-all-on btn-on"  onclick="allRelays('ON')">ALL ON</button>
+    <button class="btn btn-all-off btn-off" onclick="allRelays('OFF')">ALL OFF</button>
+  </div>
+
+  <!-- Relay grid -->
+  <div class="relay-section">
+    <h2>// relay outputs</h2>
+    <div class="relay-grid" id="relay-grid">
+      <!-- filled by JS -->
+    </div>
+  </div>
+
+  <!-- Inputs -->
+  <div class="input-section" style="grid-column:1/-1;">
+    <h2>// digital inputs</h2>
+    <div class="input-grid" id="input-grid">
+      <!-- filled by JS -->
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="log-section" style="grid-column:1/-1;">
+    <div class="log-controls">
+      <h2 style="margin:0;">// serial log</h2>
+      <div style="display:flex;gap:12px;align-items:center;">
+        <label><input type="checkbox" id="autoscroll" checked> autoscroll</label>
+        <button class="btn-clear-log" onclick="clearLog()">CLEAR</button>
+      </div>
+    </div>
+    <div id="log"></div>
+  </div>
+</main>
+
+<footer>
+  <span>OTA:</span>
+  <a href="/update">http://<span id="ip-span">...</span>/update</a>
+  <span class="ip-badge" id="ip-badge">IP: ...</span>
+</footer>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+const relayState = new Array(8).fill(false);
+const inputState = new Array(8).fill(false);
+let   logSeq     = 0;
+let   autoScrollEnabled = true;
+
+// ── Build relay cards ───────────────────────────────────────────────────────
+const grid = document.getElementById('relay-grid');
+for (let i = 0; i < 8; i++) {
+  grid.innerHTML += `
+    <div class="relay-card" id="rc${i}">
+      <div class="relay-label">RELAY</div>
+      <div class="relay-num">${i+1}</div>
+      <div class="relay-state" id="rs${i}">OFF</div>
+      <div class="btn-row">
+        <button class="btn btn-on"  onclick="relay(${i},'ON')">ON</button>
+        <button class="btn btn-off" onclick="relay(${i},'OFF')">OFF</button>
+        <button class="btn btn-tog" onclick="relay(${i},'TOGGLE')">⇄</button>
+      </div>
+    </div>`;
+}
+
+// ── Build input cards ───────────────────────────────────────────────────────
+const igrid = document.getElementById('input-grid');
+for (let i = 0; i < 8; i++) {
+  igrid.innerHTML += `
+    <div class="input-card" id="ic${i}">
+      <div class="input-dot" id="id${i}"></div>
+      <div class="input-lbl">IN${i+1}</div>
+    </div>`;
+}
+
+// ── Relay control ───────────────────────────────────────────────────────────
+function relay(idx, action) {
+  fetch(`/relay?ch=${idx+1}&action=${action}`)
+    .then(r => r.json())
+    .then(d => updateRelayUI(idx, d.state === 'ON'));
+}
+
+function allRelays(action) {
+  fetch(`/relay/all?action=${action}`)
+    .then(r => r.json())
+    .then(d => {
+      for (let i = 0; i < 8; i++) updateRelayUI(i, action === 'ON');
+    });
+}
+
+function updateRelayUI(idx, on) {
+  relayState[idx] = on;
+  const card = document.getElementById('rc'+idx);
+  const lbl  = document.getElementById('rs'+idx);
+  card.className = 'relay-card' + (on ? ' on' : '');
+  lbl.textContent = on ? 'ON' : 'OFF';
+}
+
+// ── Polling — state + log ───────────────────────────────────────────────────
+function pollState() {
+  fetch('/api/state')
+    .then(r => r.json())
+    .then(d => {
+      // Relays
+      for (let i = 0; i < 8; i++) {
+        const on = (d.relays >> i) & 1;
+        updateRelayUI(i, !!on);
+      }
+      // Inputs
+      for (let i = 0; i < 8; i++) {
+        const on = (d.inputs >> i) & 1;
+        const card = document.getElementById('ic'+i);
+        card.className = 'input-card' + (on ? ' on' : '');
+      }
+      // MQTT status
+      const dot = document.getElementById('mqtt-dot');
+      const lbl = document.getElementById('mqtt-label');
+      dot.className = 'dot ' + (d.mqtt ? 'on' : 'off');
+      lbl.textContent = d.mqtt ? 'MQTT' : 'MQTT!';
+      // AP status
+      const apDot = document.getElementById('ap-dot');
+      const apLbl = document.getElementById('ap-label');
+      apDot.className = 'dot ' + (d.ap ? 'on' : '');
+      apDot.style.background = d.ap ? 'var(--yellow)' : '';
+      apDot.style.boxShadow  = d.ap ? '0 0 6px var(--yellow)' : '';
+      apLbl.textContent = d.ap ? ('AP: ' + d.ap_ssid) : 'AP OFF';
+      apLbl.style.color = d.ap ? 'var(--yellow)' : '';
+      // IP
+      if (d.ip) {
+        document.getElementById('ip-span').textContent = d.ip;
+        document.getElementById('ip-badge').textContent = 'IP: ' + d.ip + (d.ap ? '  │  AP: 192.168.4.1' : '');
+      }
+    })
+    .catch(() => {});
+}
+
+function pollLog() {
+  fetch('/api/log?since=' + logSeq)
+    .then(r => r.json())
+    .then(d => {
+      if (d.lines && d.lines.length > 0) {
+        const logEl = document.getElementById('log');
+        d.lines.forEach(line => {
+          logSeq++;
+          const span = document.createElement('span');
+          span.className = classifyLine(line);
+          span.textContent = line + '\n';
+          logEl.appendChild(span);
+        });
+        if (document.getElementById('autoscroll').checked) {
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+      }
+    })
+    .catch(() => {});
+}
+
+function classifyLine(line) {
+  if (line.includes('[RELAY]'))  return 'log-relay';
+  if (line.includes('[MQTT'))    return 'log-mqtt';
+  if (line.includes('[WiFi]'))   return 'log-wifi';
+  if (line.includes('[ERROR]'))  return 'log-error';
+  if (line.includes('[SCHED]'))  return 'log-sched';
+  if (line.includes('[BOOT]') || line.includes('[OK]')) return 'log-boot';
+  return '';
+}
+
+function clearLog() {
+  document.getElementById('log').innerHTML = '';
+  fetch('/api/log/clear');
+}
+
+let apState = false;
+function toggleAP() {
+  fetch('/ap?action=' + (apState ? 'OFF' : 'ON'))
+    .then(r => r.json())
+    .then(d => { apState = d.active; });
+}
+
+document.getElementById('autoscroll').addEventListener('change', function() {
+  autoScrollEnabled = this.checked;
+});
+
+// Initial load + polling intervals
+pollState();
+pollLog();
+setInterval(pollState, 1500);
+setInterval(pollLog,   800);
+</script>
+</body>
+</html>
