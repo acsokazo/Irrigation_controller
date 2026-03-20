@@ -3,534 +3,528 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Relay Board</title>
+<title>Irrigation Controller</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
-
   :root {
-    --bg:       #0a0e14;
-    --panel:    #111820;
-    --border:   #1e2d3d;
-    --accent:   #00d4ff;
-    --green:    #00ff88;
-    --red:      #ff3860;
-    --yellow:   #ffcc00;
-    --text:     #c0cfe0;
-    --dim:      #3a4a5a;
-    --mono:     'Share Tech Mono', monospace;
-    --ui:       'Rajdhani', sans-serif;
+    --bg:      #0a0e14;
+    --panel:   #141e2a;
+    --border:  #2a3d52;
+    --accent:  #00d4ff;
+    --green:   #00ff88;
+    --red:     #ff3860;
+    --yellow:  #ffcc00;
+    --blue:    #4488ff;
+    --text:    #ddeeff;
+    --dim:     #6a8aaa;
+    --mono:    'Share Tech Mono', monospace;
+    --ui:      'Rajdhani', sans-serif;
   }
-
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--ui); min-height: 100vh; display: flex; flex-direction: column; }
+  body::before { content:''; position:fixed; inset:0; background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.08) 2px,rgba(0,0,0,.08) 4px); pointer-events:none; z-index:999; }
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--ui);
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-  }
+  header { display:flex; align-items:center; justify-content:space-between; padding:16px 28px; border-bottom:1px solid var(--border); background:var(--panel); }
+  .logo { font-family:var(--mono); font-size:1.1rem; color:var(--accent); letter-spacing:2px; }
+  .logo span { color:#8aabbb; }
+  .status-bar { display:flex; gap:20px; font-size:.78rem; font-family:var(--mono); color:#8aabbb; }
+  .dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:5px; background:var(--dim); }
+  .dot.on  { background:var(--green); box-shadow:0 0 6px var(--green); }
+  .dot.off { background:var(--red); }
 
-  /* scanline overlay */
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      rgba(0,0,0,0.08) 2px,
-      rgba(0,0,0,0.08) 4px
-    );
-    pointer-events: none;
-    z-index: 999;
-  }
+  main { flex:1; padding:24px 28px; display:flex; flex-direction:column; gap:20px; }
+  h2 { font-family:var(--mono); font-size:.72rem; letter-spacing:3px; color:var(--dim); text-transform:uppercase; margin-bottom:14px; }
 
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 28px;
-    border-bottom: 1px solid var(--border);
-    background: var(--panel);
-  }
+  .btn { border:none; border-radius:4px; padding:7px 16px; font-family:var(--ui); font-size:.8rem; font-weight:600; letter-spacing:1px; cursor:pointer; transition:all .15s; }
+  .btn-start  { background:rgba(0,255,136,.12); color:var(--green);  border:1px solid rgba(0,255,136,.3); }
+  .btn-stop   { background:rgba(255,56,96,.12);  color:var(--red);    border:1px solid rgba(255,56,96,.3); }
+  .btn-blue   { background:rgba(68,136,255,.12); color:var(--blue);   border:1px solid rgba(68,136,255,.3); }
+  .btn-accent { background:rgba(0,212,255,.1);   color:var(--accent); border:1px solid rgba(0,212,255,.25); }
+  .btn-dim    { background:rgba(58,74,90,.2);    color:#8aabbb;    border:1px solid var(--border); }
+  .btn:hover  { filter:brightness(1.4); transform:translateY(-1px); }
+  .btn:active { transform:translateY(0); }
+  .btn:disabled { opacity:.35; pointer-events:none; }
 
-  .logo {
-    font-family: var(--mono);
-    font-size: 1.1rem;
-    color: var(--accent);
-    letter-spacing: 2px;
-  }
-  .logo span { color: var(--dim); }
+  /* ── Program status bar ───────────────────────────────────────────────── */
+  .prog-bar { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:16px 20px; display:flex; align-items:center; gap:20px; flex-wrap:wrap; }
+  .prog-bar.running { border-color:var(--green); }
+  .prog-info { flex:1; }
+  .prog-title { font-family:var(--mono); font-size:.82rem; color:#8aabbb; }
+  .prog-title.running { color:var(--green); }
+  .prog-zone  { font-size:1.4rem; font-weight:700; color:var(--text); margin:4px 0; }
+  .prog-zone.running  { color:var(--green); text-shadow:0 0 12px var(--green); }
+  .prog-sub   { font-family:var(--mono); font-size:.72rem; color:#8aabbb; }
+  .progress-track { flex:2; min-width:180px; }
+  .progress-bg    { background:var(--border); border-radius:4px; height:6px; overflow:hidden; }
+  .progress-fill  { height:100%; background:var(--green); border-radius:4px; transition:width .5s; box-shadow:0 0 8px var(--green); }
+  .prog-btns { display:flex; gap:8px; flex-wrap:wrap; }
 
-  .status-bar {
-    display: flex;
-    gap: 20px;
-    font-size: 0.78rem;
-    font-family: var(--mono);
-    color: var(--dim);
-  }
-  .status-bar .dot {
-    display: inline-block;
-    width: 7px; height: 7px;
-    border-radius: 50%;
-    margin-right: 5px;
-    background: var(--dim);
-  }
-  .status-bar .dot.on  { background: var(--green); box-shadow: 0 0 6px var(--green); }
-  .status-bar .dot.off { background: var(--red); }
+  /* ── Zone grid ────────────────────────────────────────────────────────── */
+  .zone-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+  @media(max-width:700px){ .zone-grid { grid-template-columns:repeat(2,1fr); } }
+  .zone-card { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px 12px 10px; display:flex; flex-direction:column; align-items:center; gap:8px; position:relative; overflow:hidden; }
+  .zone-card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:var(--dim); transition:background .3s; }
+  .zone-card.active { border-color:var(--green); }
+  .zone-card.active::before { background:var(--green); box-shadow:0 0 8px var(--green); }
+  .zone-lbl { font-family:var(--mono); font-size:.62rem; color:var(--dim); letter-spacing:2px; }
+  .zone-num { font-family:var(--mono); font-size:1.7rem; font-weight:700; color:var(--text); line-height:1; }
+  .zone-card.active .zone-num { color:var(--green); text-shadow:0 0 12px var(--green); }
+  .zone-name-lbl { font-size:.78rem; color:var(--dim); text-align:center; width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .zone-dur-lbl  { font-family:var(--mono); font-size:.68rem; color:#8aabbb; }
+  .zone-card.active .zone-dur-lbl { color:var(--green); }
+  .zone-btn-row { display:flex; gap:6px; width:100%; }
+  .zone-btn-row .btn { flex:1; padding:5px 0; font-size:.72rem; }
 
-  main {
-    flex: 1;
-    padding: 24px 28px;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto 1fr;
-    gap: 20px;
-  }
+  /* ── Sequence editor ──────────────────────────────────────────────────── */
+  .seq-panel { background:var(--panel); border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  .seq-header { padding:14px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+  .seq-list { padding:8px 0; }
+  .seq-row { display:grid; grid-template-columns:28px 1fr 90px 36px 36px; align-items:center; gap:10px; padding:8px 16px; border-bottom:1px solid rgba(30,45,61,.5); transition:background .15s; }
+  .seq-row:last-child { border-bottom:none; }
+  .seq-row.disabled { opacity:.4; }
+  .seq-row.seq-active { background:rgba(0,255,136,.05); }
 
-  @media (max-width: 900px) {
-    main { grid-template-columns: 1fr; }
-  }
+  .seq-handle { font-family:var(--mono); font-size:.8rem; color:var(--dim); text-align:center; }
+  .seq-zone-info { display:flex; align-items:center; gap:10px; }
+  .seq-badge { width:28px; height:28px; border-radius:6px; background:rgba(0,212,255,.1); border:1px solid rgba(0,212,255,.2); display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-size:.82rem; color:var(--accent); flex-shrink:0; }
+  .seq-row.seq-active .seq-badge { background:rgba(0,255,136,.15); border-color:rgba(0,255,136,.4); color:var(--green); }
+  .seq-name { font-size:.85rem; color:var(--text); font-weight:600; }
+  .seq-dur-wrap { display:flex; align-items:center; gap:5px; }
+  .seq-dur-input { width:52px; background:#0d1520; border:1px solid var(--border); border-radius:4px; color:var(--text); font-family:var(--mono); font-size:.82rem; padding:4px 6px; text-align:right; outline:none; }
+  .seq-dur-input:focus { border-color:var(--accent); }
+  .seq-dur-unit { font-family:var(--mono); font-size:.68rem; color:#8aabbb; }
+  .seq-arrow { background:none; border:1px solid var(--border); border-radius:4px; color:var(--dim); cursor:pointer; width:30px; height:30px; display:flex; align-items:center; justify-content:center; font-size:.85rem; transition:all .15s; }
+  .seq-arrow:hover { color:var(--text); border-color:#8aabbb; }
+  .seq-check { width:16px; height:16px; cursor:pointer; accent-color:var(--accent); }
+  .seq-footer { padding:12px 16px; border-top:1px solid var(--border); display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+  .seq-summary { font-family:var(--mono); font-size:.72rem; color:#8aabbb; }
 
-  h2 {
-    font-family: var(--mono);
-    font-size: 0.72rem;
-    letter-spacing: 3px;
-    color: var(--dim);
-    text-transform: uppercase;
-    margin-bottom: 14px;
-  }
+  /* ── Schedule ─────────────────────────────────────────────────────────── */
+  .sched-panel { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:16px 20px; display:flex; align-items:center; gap:20px; flex-wrap:wrap; }
+  .sched-info { flex:1; font-family:var(--mono); font-size:.82rem; }
+  .sched-time { color:var(--accent); font-size:1.1rem; }
+  .sched-days { color:var(--dim); font-size:.72rem; margin-top:4px; letter-spacing:2px; }
+  .sched-on  { color:var(--green); font-weight:700; }
+  .sched-off { color:#8aabbb; }
 
-  /* ── Relay grid ───────────────────────────── */
-  .relay-section { grid-column: 1 / -1; }
+  /* ── Log ──────────────────────────────────────────────────────────────── */
+  .log-section { display:flex; flex-direction:column; }
+  #log { background:#0d1520; border:1px solid var(--border); border-radius:6px; padding:14px; font-family:var(--mono); font-size:.72rem; line-height:1.7; color:#8aabbb; overflow-y:auto; height:200px; white-space:pre-wrap; word-break:break-all; }
+  #log .log-irr   { color:var(--green); }
+  #log .log-mqtt  { color:var(--accent); }
+  #log .log-wifi  { color:var(--yellow); }
+  #log .log-error { color:var(--red); }
+  #log .log-sched { color:#c084fc; }
+  #log .log-boot  { color:var(--text); }
+  .log-controls { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+  .log-controls label { display:flex; align-items:center; gap:6px; font-size:.75rem; color:var(--dim); cursor:pointer; font-family:var(--mono); }
+  .btn-clear-log { background:none; border:1px solid var(--border); color:var(--dim); border-radius:4px; padding:4px 12px; font-family:var(--mono); font-size:.7rem; cursor:pointer; }
+  .btn-clear-log:hover { color:var(--text); border-color:#8aabbb; }
 
-  .relay-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
-  }
-  @media (max-width: 700px) {
-    .relay-grid { grid-template-columns: repeat(2, 1fr); }
-  }
-
-  .relay-card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 18px 14px 14px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 12px;
-    transition: border-color 0.2s;
-    position: relative;
-    overflow: hidden;
-  }
-  .relay-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 2px;
-    background: var(--dim);
-    transition: background 0.3s;
-  }
-  .relay-card.on { border-color: var(--green); }
-  .relay-card.on::before { background: var(--green); box-shadow: 0 0 8px var(--green); }
-
-  .relay-label {
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    color: var(--dim);
-    letter-spacing: 2px;
-  }
-
-  .relay-num {
-    font-family: var(--mono);
-    font-size: 2rem;
-    font-weight: 700;
-    color: var(--text);
-    line-height: 1;
-  }
-  .relay-card.on .relay-num { color: var(--green); text-shadow: 0 0 12px var(--green); }
-
-  .relay-state {
-    font-size: 0.75rem;
-    font-family: var(--mono);
-    letter-spacing: 2px;
-    color: var(--dim);
-  }
-  .relay-card.on .relay-state { color: var(--green); }
-
-  .btn-row {
-    display: flex;
-    gap: 6px;
-    width: 100%;
-  }
-
-  .btn {
-    flex: 1;
-    border: none;
-    border-radius: 4px;
-    padding: 7px 0;
-    font-family: var(--ui);
-    font-size: 0.78rem;
-    font-weight: 600;
-    letter-spacing: 1px;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  .btn-on  { background: rgba(0,255,136,0.12); color: var(--green); border: 1px solid rgba(0,255,136,0.3); }
-  .btn-off { background: rgba(255,56,96,0.12);  color: var(--red);   border: 1px solid rgba(255,56,96,0.3);  }
-  .btn-tog { background: rgba(0,212,255,0.1);   color: var(--accent);border: 1px solid rgba(0,212,255,0.25); flex: 0.8; }
-
-  .btn:hover { filter: brightness(1.4); transform: translateY(-1px); }
-  .btn:active { transform: translateY(0); }
-
-  /* ── All relays bar ───────────────────────── */
-  .all-bar {
-    grid-column: 1 / -1;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 14px 20px;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-  .all-bar span {
-    font-family: var(--mono);
-    font-size: 0.72rem;
-    color: var(--dim);
-    letter-spacing: 2px;
-    flex: 1;
-  }
-  .btn-all-on, .btn-all-off {
-    padding: 8px 24px;
-    font-size: 0.85rem;
-  }
-
-  /* ── Input section ────────────────────────── */
-  .input-section { }
-
-  .input-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
-  }
-
-  .input-card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 12px 8px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-  }
-  .input-card.on { border-color: var(--yellow); }
-
-  .input-dot {
-    width: 12px; height: 12px;
-    border-radius: 50%;
-    background: var(--dim);
-  }
-  .input-card.on .input-dot {
-    background: var(--yellow);
-    box-shadow: 0 0 8px var(--yellow);
-  }
-
-  .input-lbl {
-    font-family: var(--mono);
-    font-size: 0.65rem;
-    color: var(--dim);
-    letter-spacing: 1px;
-  }
-  .input-card.on .input-lbl { color: var(--yellow); }
-
-  /* ── Log section ──────────────────────────── */
-  .log-section { display: flex; flex-direction: column; }
-
-  #log {
-    flex: 1;
-    background: #070b10;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 14px;
-    font-family: var(--mono);
-    font-size: 0.72rem;
-    line-height: 1.7;
-    color: #6a8a9a;
-    overflow-y: auto;
-    height: 280px;
-    white-space: pre-wrap;
-    word-break: break-all;
-  }
-
-  #log .log-relay  { color: var(--green); }
-  #log .log-mqtt   { color: var(--accent); }
-  #log .log-wifi   { color: var(--yellow); }
-  #log .log-error  { color: var(--red); }
-  #log .log-sched  { color: #c084fc; }
-  #log .log-boot   { color: var(--text); }
-
-  .log-controls {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-  }
-  .log-controls label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.75rem;
-    color: var(--dim);
-    cursor: pointer;
-    font-family: var(--mono);
-  }
-  .btn-clear-log {
-    background: none;
-    border: 1px solid var(--border);
-    color: var(--dim);
-    border-radius: 4px;
-    padding: 4px 12px;
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    cursor: pointer;
-  }
-  .btn-clear-log:hover { color: var(--text); border-color: var(--dim); }
-
-  /* ── OTA bar ──────────────────────────────── */
-  footer {
-    padding: 12px 28px;
-    border-top: 1px solid var(--border);
-    background: var(--panel);
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    font-size: 0.75rem;
-    font-family: var(--mono);
-    color: var(--dim);
-  }
-  footer a {
-    color: var(--accent);
-    text-decoration: none;
-    letter-spacing: 1px;
-  }
-  footer a:hover { text-decoration: underline; }
-  .ip-badge {
-    margin-left: auto;
-    color: var(--dim);
-  }
+  footer { padding:12px 28px; border-top:1px solid var(--border); background:var(--panel); display:flex; align-items:center; gap:16px; font-size:.75rem; font-family:var(--mono); color:#8aabbb; }
+  footer a { color:var(--accent); text-decoration:none; }
+  .ip-badge { margin-left:auto; }
 </style>
 </head>
 <body>
 
 <header>
-  <div class="logo">Irrigation<span> </span>controller</div>
+  <div class="logo">ESP32<span>_</span>IRRIGATION</div>
   <div class="status-bar">
-    <div id="mqtt-status"><span class="dot" id="mqtt-dot"></span><span id="mqtt-label">MQTT</span></div>
-    <div id="wifi-status"><span class="dot on"></span>WiFi</div>
-    <div id="ap-status" style="cursor:pointer" onclick="toggleAP()" title="Click to toggle AP">
-      <span class="dot" id="ap-dot"></span><span id="ap-label">AP OFF</span>
+    <div><span class="dot" id="mqtt-dot"></span><span id="mqtt-lbl">MQTT</span></div>
+    <div><span class="dot on"></span>WiFi</div>
+    <div style="cursor:pointer" onclick="toggleAP()" title="Toggle AP">
+      <span class="dot" id="ap-dot"></span><span id="ap-lbl">AP OFF</span>
     </div>
   </div>
 </header>
 
 <main>
-  <!-- All relays bar -->
-  <div class="all-bar" style="grid-column:1/-1; margin-bottom:4px;">
-    <span>ALL RELAYS</span>
-    <button class="btn btn-all-on btn-on"  onclick="allRelays('ON')">ALL ON</button>
-    <button class="btn btn-all-off btn-off" onclick="allRelays('OFF')">ALL OFF</button>
-  </div>
 
-  <!-- Relay grid -->
-  <div class="relay-section">
-    <h2>// relay outputs</h2>
-    <div class="relay-grid" id="relay-grid">
-      <!-- filled by JS -->
+  <!-- Program status bar -->
+  <div>
+    <h2>// active program</h2>
+    <div class="prog-bar" id="prog-bar">
+      <div class="prog-info">
+        <div class="prog-title" id="prog-title">IDLE</div>
+        <div class="prog-zone"  id="prog-zone">—</div>
+        <div class="prog-sub"   id="prog-sub"></div>
+      </div>
+      <div class="progress-track" id="prog-track" style="display:none">
+        <div class="progress-bg"><div class="progress-fill" id="prog-fill" style="width:0%"></div></div>
+      </div>
+      <div class="prog-btns">
+        <button class="btn btn-blue"  onclick="programStart()">▶ FULL CYCLE</button>
+        <button class="btn btn-accent" onclick="runSequence()">▶ SEQUENCE</button>
+        <button class="btn btn-stop"  onclick="programStop()">■ STOP</button>
+      </div>
     </div>
   </div>
 
-  <!-- Inputs -->
-  <div class="input-section" style="grid-column:1/-1;">
-    <h2>// digital inputs</h2>
-    <div class="input-grid" id="input-grid">
-      <!-- filled by JS -->
+  <!-- Zone status grid -->
+  <div>
+    <h2>// zone status</h2>
+    <div class="zone-grid" id="zone-grid"></div>
+  </div>
+
+  <!-- Sequence editor -->
+  <div>
+    <h2>// sequence editor</h2>
+    <div class="seq-panel">
+      <div class="seq-header">
+        <span style="font-family:var(--mono);font-size:.75rem;color:var(--dim)">
+          Drag to reorder &nbsp;·&nbsp; uncheck to skip &nbsp;·&nbsp; set duration per zone
+        </span>
+        <button class="btn btn-dim" onclick="resetSequence()" style="padding:5px 12px;font-size:.75rem">RESET</button>
+      </div>
+      <div class="seq-list" id="seq-list"></div>
+      <div class="seq-footer">
+        <span class="seq-summary" id="seq-summary">— min total</span>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-accent" onclick="runSequence()">▶ RUN NOW</button>
+          <button class="btn btn-blue"   onclick="saveSequenceSchedule()">SAVE TO SCHEDULE</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Daily schedule status -->
+  <div>
+    <h2>// daily schedule</h2>
+    <div class="sched-panel">
+      <div class="sched-info">
+        <div class="sched-time" id="sched-time">--:--</div>
+        <div class="sched-days" id="sched-days">not configured</div>
+      </div>
+      <span id="sched-state" class="sched-off">DISABLED</span>
     </div>
   </div>
 
   <!-- Log -->
-  <div class="log-section" style="grid-column:1/-1;">
+  <div class="log-section">
     <div class="log-controls">
-      <h2 style="margin:0;">// serial log</h2>
-      <div style="display:flex;gap:12px;align-items:center;">
+      <h2 style="margin:0">// serial log</h2>
+      <div style="display:flex;gap:12px;align-items:center">
         <label><input type="checkbox" id="autoscroll" checked> autoscroll</label>
         <button class="btn-clear-log" onclick="clearLog()">CLEAR</button>
       </div>
     </div>
     <div id="log"></div>
   </div>
+
 </main>
 
 <footer>
-  <span>OTA:</span>
-  <a href="/update">http://<span id="ip-span">...</span>/update</a>
+  <a href="/update">OTA update</a>
   <span class="ip-badge" id="ip-badge">IP: ...</span>
 </footer>
 
 <script>
-// ── State ──────────────────────────────────────────────────────────────────
-const relayState = new Array(8).fill(false);
-const inputState = new Array(8).fill(false);
-let   logSeq     = 0;
-let   autoScrollEnabled = true;
+// ── Sequence state (editor) ─────────────────────────────────────────────────
+// Each entry: { zone: 1-8, name: str, enabled: bool, duration: int (min) }
+let sequence = Array.from({length:8}, (_,i) => ({
+  zone: i+1, name: 'Zone '+(i+1), enabled: true, duration: 10
+}));
 
-// ── Build relay cards ───────────────────────────────────────────────────────
-const grid = document.getElementById('relay-grid');
+let apState  = false;
+let logSeq   = 0;
+let zoneData = [];  // from /api/state
+
+// ── Build zone status grid ──────────────────────────────────────────────────
+const grid = document.getElementById('zone-grid');
 for (let i = 0; i < 8; i++) {
   grid.innerHTML += `
-    <div class="relay-card" id="rc${i}">
-      <div class="relay-label">RELAY</div>
-      <div class="relay-num">${i+1}</div>
-      <div class="relay-state" id="rs${i}">OFF</div>
-      <div class="btn-row">
-        <button class="btn btn-on"  onclick="relay(${i},'ON')">ON</button>
-        <button class="btn btn-off" onclick="relay(${i},'OFF')">OFF</button>
-        <button class="btn btn-tog" onclick="relay(${i},'TOGGLE')">⇄</button>
+    <div class="zone-card" id="zc${i}">
+      <div class="zone-lbl">ZONE</div>
+      <div class="zone-num">${i+1}</div>
+      <div class="zone-name-lbl" id="zn${i}">Zone ${i+1}</div>
+      <div class="zone-dur-lbl"  id="zd${i}">-- min</div>
+      <div class="zone-btn-row">
+        <button class="btn btn-start" onclick="zoneStart(${i+1})">▶</button>
+        <button class="btn btn-stop"  onclick="programStop()">■</button>
       </div>
     </div>`;
 }
 
-// ── Build input cards ───────────────────────────────────────────────────────
-const igrid = document.getElementById('input-grid');
-for (let i = 0; i < 8; i++) {
-  igrid.innerHTML += `
-    <div class="input-card" id="ic${i}">
-      <div class="input-dot" id="id${i}"></div>
-      <div class="input-lbl">IN${i+1}</div>
-    </div>`;
+// ── Render sequence editor ──────────────────────────────────────────────────
+function renderSequence() {
+  const list = document.getElementById('seq-list');
+  list.innerHTML = '';
+
+  sequence.forEach((entry, idx) => {
+    const isFirst = idx === 0;
+    const isLast  = idx === sequence.length - 1;
+    const row = document.createElement('div');
+    row.className = 'seq-row' + (entry.enabled ? '' : ' disabled');
+    row.setAttribute('data-idx', idx);
+
+    row.innerHTML = `
+      <div class="seq-handle">${idx+1}</div>
+      <div class="seq-zone-info">
+        <div class="seq-badge">${entry.zone}</div>
+        <div class="seq-name">${entry.name}</div>
+      </div>
+      <div class="seq-dur-wrap">
+        <input class="seq-dur-input" type="number" min="1" max="120" value="${entry.duration}"
+          oninput="setDuration(${idx}, this.value)">
+        <span class="seq-dur-unit">min</span>
+      </div>
+      <button class="seq-arrow" onclick="moveUp(${idx})"   ${isFirst ? 'disabled style="opacity:.2"' : ''}>▲</button>
+      <button class="seq-arrow" onclick="moveDown(${idx})" ${isLast  ? 'disabled style="opacity:.2"' : ''}>▼</button>
+    `;
+
+    // Checkbox overlaid on the badge
+    const chk = document.createElement('input');
+    chk.type      = 'checkbox';
+    chk.className = 'seq-check';
+    chk.checked   = entry.enabled;
+    chk.title     = 'Enable/disable this zone';
+    chk.style.cssText = 'position:absolute;top:10px;right:10px';
+    chk.onchange  = () => { sequence[idx].enabled = chk.checked; renderSequence(); };
+    // Put checkbox in its own cell instead
+    row.style.gridTemplateColumns = '28px 1fr 90px 36px 36px 24px';
+    row.innerHTML += `<input class="seq-check" type="checkbox" ${entry.enabled?'checked':''} title="Skip zone" onchange="toggleZone(${idx},this.checked)">`;
+
+    list.appendChild(row);
+  });
+
+  updateSummary();
 }
 
-// ── Relay control ───────────────────────────────────────────────────────────
-function relay(idx, action) {
-  fetch(`/relay?ch=${idx+1}&action=${action}`)
-    .then(r => r.json())
-    .then(d => updateRelayUI(idx, d.state === 'ON'));
+function toggleZone(idx, checked) {
+  sequence[idx].enabled = checked;
+  renderSequence();
+}
+function setDuration(idx, val) {
+  const v = parseInt(val);
+  if (!isNaN(v) && v >= 1) {
+    sequence[idx].duration = v;
+    updateSummary();
+  }
+}
+function moveUp(idx) {
+  if (idx === 0) return;
+  [sequence[idx-1], sequence[idx]] = [sequence[idx], sequence[idx-1]];
+  renderSequence();
+}
+function moveDown(idx) {
+  if (idx === sequence.length-1) return;
+  [sequence[idx], sequence[idx+1]] = [sequence[idx+1], sequence[idx]];
+  renderSequence();
+}
+function resetSequence() {
+  sequence = zoneData.length ? zoneData.map(z => ({
+    zone: z.id, name: z.name, enabled: true, duration: z.duration
+  })) : Array.from({length:8}, (_,i) => ({
+    zone: i+1, name: 'Zone '+(i+1), enabled: true, duration: 10
+  }));
+  renderSequence();
+}
+function updateSummary() {
+  const active = sequence.filter(e => e.enabled);
+  const total  = active.reduce((s,e) => s + e.duration, 0);
+  const h = Math.floor(total/60), m = total%60;
+  const timeStr = h > 0 ? `${h}h ${m}min` : `${m} min`;
+  document.getElementById('seq-summary').textContent =
+    `${active.length} zones active · ${timeStr} total`;
 }
 
-function allRelays(action) {
-  fetch(`/relay/all?action=${action}`)
-    .then(r => r.json())
-    .then(d => {
-      for (let i = 0; i < 8; i++) updateRelayUI(i, action === 'ON');
-    });
+// ── Run sequence ────────────────────────────────────────────────────────────
+function buildPayload() {
+  return sequence
+    .filter(e => e.enabled)
+    .map(e => ({ zone: e.zone, duration: e.duration }));
 }
 
-function updateRelayUI(idx, on) {
-  relayState[idx] = on;
-  const card = document.getElementById('rc'+idx);
-  const lbl  = document.getElementById('rs'+idx);
-  card.className = 'relay-card' + (on ? ' on' : '');
-  lbl.textContent = on ? 'ON' : 'OFF';
+function runSequence() {
+  const payload = buildPayload();
+  if (payload.length === 0) return;
+  fetch('/api/program/set', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  }).then(() => pollState());
 }
 
-// ── Polling — state + log ───────────────────────────────────────────────────
+function saveSequenceSchedule() {
+  // Saves the current sequence as the custom program that will
+  // run when the daily schedule fires — sends it to the board.
+  const payload = buildPayload();
+  fetch('/api/sequence/save', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  }).then(r => r.json()).then(() => {
+    const btn = event.target;
+    btn.textContent = '✓ SAVED';
+    setTimeout(() => btn.textContent = 'SAVE TO SCHEDULE', 1500);
+  });
+}
+
+// ── Program control ─────────────────────────────────────────────────────────
+function zoneStart(n) {
+  // Look up the duration for this zone from the sequence editor
+  const entry = sequence.find(e => e.zone === n);
+  const dur   = entry ? entry.duration : 0;
+  fetch('/api/zone/start?n='+n+'&duration='+dur, {method:'POST'}).then(()=>pollState());
+}
+function programStart() {
+  fetch('/api/program/start', {method:'POST'}).then(()=>pollState());
+}
+function programStop() {
+  fetch('/api/program/stop', {method:'POST'}).then(()=>pollState());
+}
+function toggleAP() {
+  fetch('/ap?action='+(apState?'OFF':'ON'))
+    .then(r=>r.json()).then(d=>{ apState=d.active; });
+}
+
+// ── State polling ────────────────────────────────────────────────────────────
 function pollState() {
-  fetch('/api/state')
-    .then(r => r.json())
-    .then(d => {
-      // Relays
-      for (let i = 0; i < 8; i++) {
-        const on = (d.relays >> i) & 1;
-        updateRelayUI(i, !!on);
-      }
-      // Inputs
-      for (let i = 0; i < 8; i++) {
-        const on = (d.inputs >> i) & 1;
-        const card = document.getElementById('ic'+i);
-        card.className = 'input-card' + (on ? ' on' : '');
-      }
-      // MQTT status
-      const dot = document.getElementById('mqtt-dot');
-      const lbl = document.getElementById('mqtt-label');
-      dot.className = 'dot ' + (d.mqtt ? 'on' : 'off');
-      lbl.textContent = d.mqtt ? 'MQTT' : 'MQTT!';
-      // AP status
-      const apDot = document.getElementById('ap-dot');
-      const apLbl = document.getElementById('ap-label');
-      apDot.className = 'dot ' + (d.ap ? 'on' : '');
-      apDot.style.background = d.ap ? 'var(--yellow)' : '';
-      apDot.style.boxShadow  = d.ap ? '0 0 6px var(--yellow)' : '';
-      apLbl.textContent = d.ap ? ('AP: ' + d.ap_ssid) : 'AP OFF';
-      apLbl.style.color = d.ap ? 'var(--yellow)' : '';
-      // IP
-      if (d.ip) {
-        document.getElementById('ip-span').textContent = d.ip;
-        document.getElementById('ip-badge').textContent = 'IP: ' + d.ip + (d.ap ? '  │  AP: 192.168.4.1' : '');
-      }
-    })
-    .catch(() => {});
-}
+  fetch('/api/state').then(r=>r.json()).then(d=>{
 
-function pollLog() {
-  fetch('/api/log?since=' + logSeq)
-    .then(r => r.json())
-    .then(d => {
-      if (d.lines && d.lines.length > 0) {
-        const logEl = document.getElementById('log');
-        d.lines.forEach(line => {
-          logSeq++;
-          const span = document.createElement('span');
-          span.className = classifyLine(line);
-          span.textContent = line + '\n';
-          logEl.appendChild(span);
-        });
-        if (document.getElementById('autoscroll').checked) {
-          logEl.scrollTop = logEl.scrollHeight;
+    // Update zone cards
+    zoneData = d.zones || [];
+    zoneData.forEach((z,i)=>{
+      const active = z.state === 'ON';
+      document.getElementById('zc'+i).className = 'zone-card'+(active?' active':'');
+      document.getElementById('zn'+i).textContent = z.name||('Zone '+(i+1));
+      // Show actual running duration if this zone is currently active
+      const isActive = z.state === 'ON' && d.program_running && d.active_zone === i+1;
+      const dispDur  = isActive && d.step_duration_sec
+                       ? Math.round(d.step_duration_sec/60) : z.duration;
+      document.getElementById('zd'+i).textContent = dispDur+' min';
+      // Sync names into sequence editor
+      if (sequence[i] && sequence[i].zone === i+1)
+        sequence[i].name = z.name||('Zone '+(i+1));
+    });
+
+    // Program bar
+    const running = d.program_running;
+    const bar   = document.getElementById('prog-bar');
+    const title = document.getElementById('prog-title');
+    const zone  = document.getElementById('prog-zone');
+    const sub   = document.getElementById('prog-sub');
+    const track = document.getElementById('prog-track');
+    const fill  = document.getElementById('prog-fill');
+
+    if (running) {
+      const az   = zoneData[d.active_zone-1];
+      const name = az ? az.name : ('Zone '+d.active_zone);
+      // Use actual step duration from firmware, not zone config default
+      const dur  = d.step_duration_sec || (az ? az.duration*60 : 0);
+      const pct  = dur>0 ? Math.min(100,(d.elapsed_sec/dur)*100) : 0;
+      const rs   = d.remaining_sec||0;
+      const rem  = Math.floor(rs/60)+'m '+(rs%60)+'s left';
+      bar.className    = 'prog-bar running';
+      title.textContent = 'RUNNING'; title.className = 'prog-title running';
+      zone.textContent  = name;      zone.className  = 'prog-zone running';
+      sub.textContent   = rem;
+      track.style.display = '';
+      fill.style.width    = pct+'%';
+    } else {
+      bar.className    = 'prog-bar';
+      title.textContent = 'IDLE'; title.className = 'prog-title';
+      zone.textContent  = '—';   zone.className  = 'prog-zone';
+      sub.textContent   = '';
+      track.style.display = 'none';
+    }
+
+    // Highlight active row in sequence editor
+    document.querySelectorAll('.seq-row').forEach(r => r.classList.remove('seq-active'));
+    if (running && d.active_zone) {
+      const activeRow = document.querySelector(`.seq-row[data-idx]`);
+      // find by zone number
+      sequence.forEach((e,i) => {
+        if (e.zone === d.active_zone) {
+          const r = document.querySelector(`.seq-row[data-idx="${i}"]`);
+          if (r) r.classList.add('seq-active');
         }
+      });
+    }
+
+    // Schedule
+    if (d.schedule) {
+      document.getElementById('sched-time').textContent = d.schedule.time||'--:--';
+      document.getElementById('sched-days').textContent = d.schedule.days||'';
+      const st = document.getElementById('sched-state');
+      st.textContent = d.schedule.enabled ? 'ENABLED' : 'DISABLED';
+      st.className   = d.schedule.enabled ? 'sched-on' : 'sched-off';
+    }
+
+    // Network
+    const dot = document.getElementById('mqtt-dot');
+    dot.className = 'dot '+(d.mqtt?'on':'off');
+    document.getElementById('mqtt-lbl').textContent = d.mqtt?'MQTT':'MQTT!';
+    apState = d.ap;
+    const apDot = document.getElementById('ap-dot');
+    apDot.className      = 'dot'+(d.ap?' on':'');
+    apDot.style.background = d.ap?'var(--yellow)':'';
+    apDot.style.boxShadow  = d.ap?'0 0 6px var(--yellow)':'';
+    document.getElementById('ap-lbl').textContent = d.ap?('AP:'+d.ap_ssid):'AP OFF';
+    if (d.ip) document.getElementById('ip-badge').textContent = 'IP: '+d.ip;
+
+    // Sync sequence editor if server state differs (MQTT change from another client)
+    if (d.sequence && d.sequence.length > 0) {
+      const sv = d.sequence;
+      const same = sv.length === sequence.length &&
+        sv.every((s,i) => s.zone === sequence[i].zone && s.duration === sequence[i].duration);
+      if (!same) {
+        sequence = sv.map(s => ({
+          zone: s.zone, name: s.name||('Zone '+s.zone),
+          enabled: s.enabled !== false, duration: s.duration
+        }));
+      } else {
+        sequence.forEach((e,i) => { if (sv[i]) e.name = sv[i].name||e.name; });
       }
-    })
-    .catch(() => {});
+    }
+
+    // Only re-render sequence editor if no duration input is focused
+    // (avoids wiping a value the user is currently typing)
+    const focused = document.activeElement;
+    if (!focused || !focused.classList.contains('seq-dur-input')) {
+      renderSequence();
+    }
+  }).catch(()=>{});
 }
 
-function classifyLine(line) {
-  if (line.includes('[RELAY]'))  return 'log-relay';
-  if (line.includes('[MQTT'))    return 'log-mqtt';
-  if (line.includes('[WiFi]'))   return 'log-wifi';
-  if (line.includes('[ERROR]'))  return 'log-error';
-  if (line.includes('[SCHED]'))  return 'log-sched';
-  if (line.includes('[BOOT]') || line.includes('[OK]')) return 'log-boot';
+// ── Log polling ──────────────────────────────────────────────────────────────
+function pollLog() {
+  fetch('/api/log?since='+logSeq).then(r=>r.json()).then(d=>{
+    if (!d.lines||d.lines.length===0) return;
+    const el = document.getElementById('log');
+    d.lines.forEach(line=>{
+      logSeq++;
+      const span = document.createElement('span');
+      span.className  = classifyLine(line);
+      span.textContent = line+'\
+';
+      el.appendChild(span);
+    });
+    if (document.getElementById('autoscroll').checked)
+      el.scrollTop = el.scrollHeight;
+  }).catch(()=>{});
+}
+function classifyLine(l) {
+  if (l.includes('[IRR]'))   return 'log-irr';
+  if (l.includes('[MQTT'))   return 'log-mqtt';
+  if (l.includes('[WiFi]'))  return 'log-wifi';
+  if (l.includes('[ERROR]')) return 'log-error';
+  if (l.includes('[SCHED]')) return 'log-sched';
+  if (l.includes('[BOOT]')||l.includes('[OK]')) return 'log-boot';
   return '';
 }
-
 function clearLog() {
-  document.getElementById('log').innerHTML = '';
+  document.getElementById('log').innerHTML='';
   fetch('/api/log/clear');
 }
 
-let apState = false;
-function toggleAP() {
-  fetch('/ap?action=' + (apState ? 'OFF' : 'ON'))
-    .then(r => r.json())
-    .then(d => { apState = d.active; });
-}
-
-document.getElementById('autoscroll').addEventListener('change', function() {
-  autoScrollEnabled = this.checked;
-});
-
-// Initial load + polling intervals
+// ── Init ─────────────────────────────────────────────────────────────────────
+renderSequence();
 pollState();
 pollLog();
-setInterval(pollState, 1500);
-setInterval(pollLog,   800);
+setInterval(pollState, 2000);
+setInterval(pollLog,    900);
 </script>
 </body>
 </html>
