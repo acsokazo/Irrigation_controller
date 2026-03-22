@@ -47,6 +47,9 @@ extern bool      programRunning;
 extern uint8_t   currentStep;
 extern uint32_t  stepStartMs;
 extern uint32_t  stepDurationMs;
+extern bool      delayActive;
+extern uint32_t  delayStartMs;
+extern uint16_t  sequenceDelaySec;
 
 struct IrrigProgram {
     uint8_t  zones[NUM_ZONES];
@@ -125,17 +128,31 @@ static void handleApiState() {
     // Running program status
     doc["program_running"] = programRunning;
     if (programRunning) {
-        int zone = (currentStep < activeProgram.count)
-                   ? activeProgram.zones[currentStep] : 0;
-        doc["active_zone"]      = zone + 1;
-        uint32_t elapsed        = (millis() - stepStartMs) / 1000;
-        uint32_t stepTotalSec   = stepDurationMs / 1000;
-        uint32_t remaining      = stepDurationMs > (millis() - stepStartMs)
-            ? (stepDurationMs - (millis() - stepStartMs)) / 1000 : 0;
-        doc["elapsed_sec"]      = elapsed;
-        doc["remaining_sec"]    = remaining;
-        doc["step_duration_sec"]= stepTotalSec;   // actual running duration
+        if (delayActive) {
+            uint32_t elapsed   = (millis() - delayStartMs) / 1000;
+            uint32_t remaining = sequenceDelaySec > elapsed
+                                 ? sequenceDelaySec - elapsed : 0;
+            doc["phase"]         = "filling";
+            doc["next_zone"]     = (currentStep < activeProgram.count)
+                                   ? activeProgram.zones[currentStep] + 1 : 0;
+            doc["elapsed_sec"]   = elapsed;
+            doc["remaining_sec"] = remaining;
+            doc["delay_sec"]     = sequenceDelaySec;
+        } else {
+            int zone = (currentStep < activeProgram.count)
+                       ? activeProgram.zones[currentStep] : 0;
+            uint32_t elapsed      = (millis() - stepStartMs) / 1000;
+            uint32_t stepTotalSec = stepDurationMs / 1000;
+            uint32_t remaining    = stepDurationMs > (millis() - stepStartMs)
+                ? (stepDurationMs - (millis() - stepStartMs)) / 1000 : 0;
+            doc["phase"]             = "watering";
+            doc["active_zone"]       = zone + 1;
+            doc["elapsed_sec"]       = elapsed;
+            doc["remaining_sec"]     = remaining;
+            doc["step_duration_sec"] = stepTotalSec;
+        }
     }
+    doc["sequence_delay_sec"] = sequenceDelaySec;
 
     // Saved sequence (for editor sync)
     JsonArray seq = doc["sequence"].to<JsonArray>();

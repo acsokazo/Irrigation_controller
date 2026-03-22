@@ -154,6 +154,11 @@
         <span id="seq-total" style="font-family:var(--mono);font-size:.72rem;color:var(--dim)"></span>
         <button class="btn btn-accent" onclick="runSequence()">▶ RUN NOW</button>
       </div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+        <span style="font-family:var(--mono);font-size:.72rem;color:var(--dim)">TANK REFILL DELAY</span>
+        <span id="seq-delay" style="font-family:var(--mono);font-size:.82rem;color:var(--accent)">0s</span>
+        <span style="font-family:var(--mono);font-size:.68rem;color:var(--dim)">(set via MQTT sequence/delay/set)</span>
+      </div>
     </div>
   </div>
 
@@ -275,18 +280,37 @@ function pollState() {
     const track = document.getElementById('prog-track');
     const fill  = document.getElementById('prog-fill');
     if (running) {
-      const az   = zoneData[d.active_zone-1];
-      const name = az ? az.name : ('Zone '+d.active_zone);
-      const dur  = d.step_duration_sec || (az ? az.duration*60 : 0);
-      const pct  = dur>0 ? Math.min(100,(d.elapsed_sec/dur)*100) : 0;
-      const rs   = d.remaining_sec||0;
-      const rem  = Math.floor(rs/60)+'m '+(rs%60)+'s left';
-      bar.className     = 'prog-bar running';
-      title.textContent = 'RUNNING'; title.className = 'prog-title running';
-      zone.textContent  = name;      zone.className  = 'prog-zone running';
-      sub.textContent   = rem;
-      track.style.display = '';
-      fill.style.width    = pct+'%';
+      if (d.phase === 'filling') {
+        const rs  = d.remaining_sec||0;
+        const pct = d.delay_sec > 0 ? Math.min(100,(1-(rs/d.delay_sec))*100) : 100;
+        const nz  = zoneData[d.next_zone-1];
+        const nname = nz ? nz.name : ('Zone '+d.next_zone);
+        bar.className     = 'prog-bar running';
+        title.textContent = '💧 TANK FILLING'; title.className = 'prog-title running';
+        zone.textContent  = '→ ' + nname + ' next';  zone.className = 'prog-zone';
+        zone.style.fontSize = '1rem';
+        sub.textContent   = Math.floor(rs/60)+'m '+(rs%60)+'s until next zone';
+        track.style.display = '';
+        fill.style.width    = pct+'%';
+        fill.style.background = 'var(--accent)';
+        fill.style.boxShadow  = '0 0 8px var(--accent)';
+      } else {
+        fill.style.background = 'var(--green)';
+        fill.style.boxShadow  = '0 0 8px var(--green)';
+        zone.style.fontSize = '';
+        const az   = zoneData[d.active_zone-1];
+        const name = az ? az.name : ('Zone '+d.active_zone);
+        const dur  = d.step_duration_sec || (az ? az.duration*60 : 0);
+        const pct  = dur>0 ? Math.min(100,(d.elapsed_sec/dur)*100) : 0;
+        const rs   = d.remaining_sec||0;
+        const rem  = Math.floor(rs/60)+'m '+(rs%60)+'s left';
+        bar.className     = 'prog-bar running';
+        title.textContent = 'RUNNING'; title.className = 'prog-title running';
+        zone.textContent  = name;      zone.className  = 'prog-zone running';
+        sub.textContent   = rem;
+        track.style.display = '';
+        fill.style.width    = pct+'%';
+      }
     } else {
       bar.className     = 'prog-bar';
       title.textContent = 'IDLE'; title.className = 'prog-title';
@@ -297,6 +321,13 @@ function pollState() {
 
     // Saved sequence display
     renderSavedSequence(d.sequence);
+
+    // Delay display
+    if (d.sequence_delay_sec !== undefined) {
+      const ds = d.sequence_delay_sec;
+      document.getElementById('seq-delay').textContent =
+        ds === 0 ? 'off' : (ds >= 60 ? Math.floor(ds/60)+'m '+(ds%60)+'s' : ds+'s');
+    }
 
     // Schedule
     if (d.schedule) {

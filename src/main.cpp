@@ -83,19 +83,24 @@ uint8_t relayBits = 0x00;
 uint16_t zoneDuration[NUM_ZONES];    // minutes per zone
 String   zoneName[NUM_ZONES];        // display name
 
-// ── Irrigation sequencer ──────────────────────────────────────────────────────
+// ── Sequencer ─────────────────────────────────────────────────────────────────
 struct IrrigProgram {
     uint8_t  zones[NUM_ZONES];
     uint8_t  count;
-    uint16_t durations[NUM_ZONES];   // 0 = use zoneDuration[]
+    uint16_t durations[NUM_ZONES];
 };
 
 IrrigProgram activeProgram;
-IrrigProgram savedProgram;   // persists the last sequence saved from web editor
+IrrigProgram savedProgram;
 bool     programRunning  = false;
 uint8_t  currentStep     = 0;
 uint32_t stepStartMs     = 0;
 uint32_t stepDurationMs  = 0;
+
+// Inter-zone delay (tank refill pause)
+uint16_t sequenceDelaySec = 0;     // configurable, seconds between zones
+bool     delayActive      = false; // true while waiting between zones
+uint32_t delayStartMs     = 0;     // when the delay started
 
 // ── Daily schedule ────────────────────────────────────────────────────────────
 struct DailySchedule {
@@ -152,23 +157,24 @@ void wifiCredsLoad() {
 // ── Sequence persistence ──────────────────────────────────────────────────────
 
 void sequenceSave() {
-    // Pack into compact binary: count + [zone, duration_lo, duration_hi] * count
     prefs.begin("seq", false);
     prefs.putUChar("count", savedProgram.count);
     for (int i = 0; i < savedProgram.count; i++) {
         prefs.putUChar(("z" + String(i)).c_str(), savedProgram.zones[i]);
         prefs.putUShort(("d" + String(i)).c_str(), savedProgram.durations[i]);
     }
+    prefs.putUShort("delay", sequenceDelaySec);
     prefs.end();
-    logf("[SEQ] Saved to flash (%d steps)", savedProgram.count);
+    logf("[SEQ] Saved to flash (%d steps, delay %ds)", savedProgram.count, sequenceDelaySec);
 }
 
 void sequenceLoad() {
     prefs.begin("seq", true);
     uint8_t count = prefs.getUChar("count", 0);
+    sequenceDelaySec = prefs.getUShort("delay", 0);
     prefs.end();
     if (count == 0 || count > NUM_ZONES) {
-        logf("[SEQ] No sequence in flash");
+        logf("[SEQ] No sequence in flash (delay=%ds)", sequenceDelaySec);
         return;
     }
     prefs.begin("seq", true);
@@ -178,7 +184,7 @@ void sequenceLoad() {
         savedProgram.durations[i] = prefs.getUShort(("d" + String(i)).c_str(), 10);
     }
     prefs.end();
-    logf("[SEQ] Loaded from flash: %d steps", savedProgram.count);
+    logf("[SEQ] Loaded from flash: %d steps, delay %ds", savedProgram.count, sequenceDelaySec);
 }
 
 void scheduleSave() {
@@ -297,6 +303,7 @@ void publishAllZoneStates() {
 
 void publishProgramState();   // forward declaration
 void publishSavedSequence();  // forward declaration
+void startNextZone();         // forward declaration
 
 void stopProgram() {
     if (!programRunning) return;
@@ -319,7 +326,7 @@ void nextStep() {
         int zone = activeProgram.zones[currentStep];
         setRelay(zone, false);
         logf("[PUB] nextStep finishing zone/%d → OFF", zone+1);
-        publishRelayState(zone);   // OFF for finished zone
+        publishRelayState(zone);
         logf("[IRR] Zone %d finished", zone + 1);
     }
 
@@ -327,11 +334,27 @@ void nextStep() {
 
     if (currentStep >= activeProgram.count) {
         programRunning = false;
+        delayActive    = false;
         logf("[IRR] Program complete");
         publishProgramState();
         return;
     }
 
+    // Start inter-zone delay if configured
+    if (sequenceDelaySec > 0 && currentStep > 0) {
+        delayActive   = true;
+        delayStartMs  = millis();
+        logf("[IRR] Tank refill delay: %ds before zone %d",
+             sequenceDelaySec, activeProgram.zones[currentStep] + 1);
+        publishProgramState();
+        return;   // loop() will call startNextZone() when delay expires
+    }
+
+    startNextZone();
+}
+
+void startNextZone() {
+    delayActive = false;
     int zone = activeProgram.zones[currentStep];
     uint32_t dur = (activeProgram.durations[currentStep] > 0)
         ? activeProgram.durations[currentStep]
@@ -340,7 +363,7 @@ void nextStep() {
     stepStartMs    = millis();
     setRelay(zone, true);
     logf("[PUB] nextStep starting zone/%d → ON", zone+1);
-    publishRelayState(zone);       // ON for new zone
+    publishRelayState(zone);
     logf("[IRR] Zone %d (%s) started — %u min", zone + 1, zoneName[zone].c_str(), dur);
     publishProgramState();
 }
@@ -373,16 +396,31 @@ void publishProgramState() {
     String base = String(MQTT_ROOT) + "/program/";
     mqtt.publish((base + "running").c_str(), programRunning ? "ON" : "OFF", true);
     if (programRunning) {
-        int zone = activeProgram.zones[currentStep];
-        uint32_t elapsed   = (millis() - stepStartMs) / 1000;
-        uint32_t remaining = stepDurationMs > (millis() - stepStartMs)
-            ? (stepDurationMs - (millis() - stepStartMs)) / 1000 : 0;
         JsonDocument doc;
-        doc["active_zone"]   = zone + 1;
-        doc["step"]          = currentStep + 1;
-        doc["total_steps"]   = activeProgram.count;
-        doc["elapsed_sec"]   = elapsed;
-        doc["remaining_sec"] = remaining;
+        doc["step"]        = currentStep + 1;
+        doc["total_steps"] = activeProgram.count;
+
+        if (delayActive) {
+            uint32_t elapsed   = (millis() - delayStartMs) / 1000;
+            uint32_t remaining = sequenceDelaySec > elapsed
+                                 ? sequenceDelaySec - elapsed : 0;
+            doc["phase"]         = "filling";
+            doc["next_zone"]     = activeProgram.zones[currentStep] + 1;
+            doc["elapsed_sec"]   = elapsed;
+            doc["remaining_sec"] = remaining;
+            doc["delay_sec"]     = sequenceDelaySec;
+        } else {
+            int zone = activeProgram.zones[currentStep];
+            uint32_t elapsed   = (millis() - stepStartMs) / 1000;
+            uint32_t remaining = stepDurationMs > (millis() - stepStartMs)
+                ? (stepDurationMs - (millis() - stepStartMs)) / 1000 : 0;
+            doc["phase"]             = "watering";
+            doc["active_zone"]       = zone + 1;
+            doc["elapsed_sec"]       = elapsed;
+            doc["remaining_sec"]     = remaining;
+            doc["step_duration_sec"] = stepDurationMs / 1000;
+        }
+
         String out;
         serializeJson(doc, out);
         mqtt.publish((base + "status").c_str(), out.c_str(), false);
@@ -463,6 +501,17 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         } else {
             logf("[IRR] program/start — no sequence configured, ignoring");
         }
+        return;
+    }
+
+    // sequence/delay/set — inter-zone tank refill delay in seconds
+    if (t == String(MQTT_ROOT) + "/sequence/delay/set") {
+        uint16_t val = msg.toInt();
+        sequenceDelaySec = val;
+        sequenceSave();
+        logf("[SEQ] Delay set to %ds", sequenceDelaySec);
+        mqtt.publish((String(MQTT_ROOT) + "/sequence/delay/state").c_str(),
+                     String(sequenceDelaySec).c_str(), true);
         return;
     }
 
@@ -609,12 +658,15 @@ void connectMqtt() {
         mqtt.subscribe((String(MQTT_ROOT) + "/program/stop").c_str());
         mqtt.subscribe((String(MQTT_ROOT) + "/program/set").c_str());
         mqtt.subscribe((String(MQTT_ROOT) + "/sequence/set").c_str());
+        mqtt.subscribe((String(MQTT_ROOT) + "/sequence/delay/set").c_str());
         mqtt.subscribe((String(MQTT_ROOT) + "/schedule/set").c_str());
         mqtt.subscribe((String(MQTT_ROOT) + "/ap/set").c_str());
         publishAllZoneStates();
         publishApState();
         publishProgramState();
         publishSavedSequence();
+        mqtt.publish((String(MQTT_ROOT) + "/sequence/delay/state").c_str(),
+                     String(sequenceDelaySec).c_str(), true);
     } else {
         logf("[MQTT] FAILED rc=%d", mqtt.state());
     }
@@ -712,11 +764,26 @@ void loop() {
 
     // Sequencer tick
     if (programRunning) {
-        if (millis() - stepStartMs >= stepDurationMs) {
-            nextStep();
+        if (delayActive) {
+            // Inter-zone tank refill delay
+            uint32_t elapsed = (millis() - delayStartMs) / 1000;
+            if (elapsed >= sequenceDelaySec) {
+                logf("[IRR] Delay complete — starting next zone");
+                startNextZone();
+            } else {
+                static uint32_t lastDelayStatus = 0;
+                if (now - lastDelayStatus >= 5000) {
+                    lastDelayStatus = now;
+                    publishProgramState();
+                }
+            }
         } else {
-            static uint32_t lastStatusMs = 0;
-            if (now - lastStatusMs >= 10000) { lastStatusMs = now; publishProgramState(); }
+            if (millis() - stepStartMs >= stepDurationMs) {
+                nextStep();
+            } else {
+                static uint32_t lastStatusMs = 0;
+                if (now - lastStatusMs >= 10000) { lastStatusMs = now; publishProgramState(); }
+            }
         }
     }
 
