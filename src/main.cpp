@@ -149,6 +149,71 @@ void wifiCredsLoad() {
     }
 }
 
+// ── Sequence persistence ──────────────────────────────────────────────────────
+
+void sequenceSave() {
+    // Pack into compact binary: count + [zone, duration_lo, duration_hi] * count
+    prefs.begin("seq", false);
+    prefs.putUChar("count", savedProgram.count);
+    for (int i = 0; i < savedProgram.count; i++) {
+        prefs.putUChar(("z" + String(i)).c_str(), savedProgram.zones[i]);
+        prefs.putUShort(("d" + String(i)).c_str(), savedProgram.durations[i]);
+    }
+    prefs.end();
+    logf("[SEQ] Saved to flash (%d steps)", savedProgram.count);
+}
+
+void sequenceLoad() {
+    prefs.begin("seq", true);
+    uint8_t count = prefs.getUChar("count", 0);
+    prefs.end();
+    if (count == 0 || count > NUM_ZONES) {
+        logf("[SEQ] No sequence in flash");
+        return;
+    }
+    prefs.begin("seq", true);
+    savedProgram.count = count;
+    for (int i = 0; i < count; i++) {
+        savedProgram.zones[i]     = prefs.getUChar(("z" + String(i)).c_str(), i);
+        savedProgram.durations[i] = prefs.getUShort(("d" + String(i)).c_str(), 10);
+    }
+    prefs.end();
+    logf("[SEQ] Loaded from flash: %d steps", savedProgram.count);
+}
+
+void scheduleSave() {
+    prefs.begin("sched", false);
+    prefs.putBool("enabled", dailySched.enabled);
+    prefs.putUChar("hour",   dailySched.hour);
+    prefs.putUChar("minute", dailySched.minute);
+    // Pack 7 day booleans into one byte
+    uint8_t dayBits = 0;
+    for (int d = 0; d < 7; d++) if (dailySched.days[d]) dayBits |= (1 << d);
+    prefs.putUChar("days", dayBits);
+    prefs.end();
+    logf("[SCHED] Saved to flash: %02d:%02d enabled=%s",
+         dailySched.hour, dailySched.minute, dailySched.enabled ? "yes" : "no");
+}
+
+void scheduleLoad() {
+    prefs.begin("sched", true);
+    bool hasData = prefs.isKey("hour");
+    if (hasData) {
+        dailySched.enabled = prefs.getBool("enabled", false);
+        dailySched.hour    = prefs.getUChar("hour",   6);
+        dailySched.minute  = prefs.getUChar("minute", 0);
+        uint8_t dayBits    = prefs.getUChar("days",   0x7F);
+        for (int d = 0; d < 7; d++) dailySched.days[d] = (dayBits >> d) & 1;
+    }
+    prefs.end();
+    if (hasData) {
+        logf("[SCHED] Loaded from flash: %02d:%02d enabled=%s",
+             dailySched.hour, dailySched.minute, dailySched.enabled ? "yes" : "no");
+    } else {
+        logf("[SCHED] No schedule in flash");
+    }
+}
+
 bool apActive = AP_DEFAULT;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -216,10 +281,13 @@ void allRelaysOff() {
 
 void publishRelayState(int idx) {
     if (!mqtt.connected()) return;
-    mqtt.publish(zoneTopic(idx, "state").c_str(), getRelay(idx) ? "ON" : "OFF", true);
+    bool on = getRelay(idx);
+    logf("[PUB] zone/%d/state → %s  (stack hint: check log above)", idx+1, on?"ON":"OFF");
+    mqtt.publish(zoneTopic(idx, "state").c_str(), on ? "ON" : "OFF", true);
 }
 
 void publishAllZoneStates() {
+    logf("[PUB] publishAllZoneStates called");
     for (int i = 0; i < NUM_ZONES; i++) publishRelayState(i);
 }
 
@@ -232,9 +300,15 @@ void publishSavedSequence();  // forward declaration
 
 void stopProgram() {
     if (!programRunning) return;
+    // Only publish the zone that was actually running — others are already OFF
+    int activeZone = (currentStep < activeProgram.count)
+                     ? activeProgram.zones[currentStep] : -1;
     allRelaysOff();
-    publishAllZoneStates();
     programRunning = false;
+    if (activeZone >= 0) {
+        logf("[PUB] stopProgram publishing zone/%d OFF", activeZone+1);
+        publishRelayState(activeZone);
+    }
     logf("[IRR] Program stopped");
     publishProgramState();
 }
@@ -244,7 +318,8 @@ void nextStep() {
     if (programRunning && currentStep < activeProgram.count) {
         int zone = activeProgram.zones[currentStep];
         setRelay(zone, false);
-        publishRelayState(zone);
+        logf("[PUB] nextStep finishing zone/%d → OFF", zone+1);
+        publishRelayState(zone);   // OFF for finished zone
         logf("[IRR] Zone %d finished", zone + 1);
     }
 
@@ -264,16 +339,22 @@ void nextStep() {
     stepDurationMs = (uint32_t)dur * 60000UL;
     stepStartMs    = millis();
     setRelay(zone, true);
-    publishRelayState(zone);
+    logf("[PUB] nextStep starting zone/%d → ON", zone+1);
+    publishRelayState(zone);       // ON for new zone
     logf("[IRR] Zone %d (%s) started — %u min", zone + 1, zoneName[zone].c_str(), dur);
     publishProgramState();
 }
 
 void startProgram(const IrrigProgram& prog) {
-    if (programRunning) stopProgram();
+    if (programRunning) {
+        // Silent stop — don't publish all zone states, nextStep handles publishing
+        allRelaysOff();
+        programRunning = false;
+        logf("[IRR] Program interrupted");
+    }
     if (prog.count == 0) return;
     activeProgram  = prog;
-    currentStep    = 255;   // nextStep() increments to 0
+    currentStep    = 255;
     programRunning = true;
     nextStep();
 }
@@ -285,17 +366,6 @@ void startZone(int idx, uint16_t durationMin = 0) {
     p.zones[0]     = idx;
     p.durations[0] = durationMin;
     startProgram(p);
-}
-
-void startFullCycle() {
-    IrrigProgram p;
-    p.count = NUM_ZONES;
-    for (int i = 0; i < NUM_ZONES; i++) {
-        p.zones[i]     = i;
-        p.durations[i] = 0;
-    }
-    startProgram(p);
-    logf("[IRR] Full cycle started");
 }
 
 void publishProgramState() {
@@ -344,6 +414,23 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     String msg;
     for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
     msg.trim();
+
+    // Deduplicate retained replays: ignore if identical topic+payload was processed
+    // within last 500ms. Only applies to command (/set) topics — state topics are fine.
+    if (t.endsWith("/set") || t.endsWith("/start") || t.endsWith("/stop")) {
+        static String lastTopic;
+        static String lastMsg;
+        static uint32_t lastMs = 0;
+        uint32_t now2 = millis();
+        if (t == lastTopic && msg == lastMsg && (now2 - lastMs) < 500) {
+            logf("[MQTT] Retained replay ignored: %s", topic);
+            return;
+        }
+        lastTopic = t;
+        lastMsg   = msg;
+        lastMs    = now2;
+    }
+
     logf("[MQTT IN] %s → %s", topic, msg.c_str());
 
     // ap/set
@@ -353,14 +440,30 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         return;
     }
 
+    // reboot
+    if (t == String(MQTT_ROOT) + "/reboot") {
+        logf("[SYS] Reboot requested via MQTT");
+        mqtt.publish((String(MQTT_ROOT) + "/status").c_str(), "rebooting", true);
+        mqtt.loop();
+        delay(500);
+        ESP.restart();
+        return;
+    }
+
     // program/stop
     if (t == String(MQTT_ROOT) + "/program/stop") {
         stopProgram(); return;
     }
 
-    // program/start — full cycle
+    // program/start — run saved sequence
     if (t == String(MQTT_ROOT) + "/program/start") {
-        startFullCycle(); return;
+        if (savedProgram.count > 0) {
+            logf("[IRR] program/start — running saved sequence (%d zones)", savedProgram.count);
+            startProgram(savedProgram);
+        } else {
+            logf("[IRR] program/start — no sequence configured, ignoring");
+        }
+        return;
     }
 
     // sequence/set — save custom sequence from MQTT
@@ -378,6 +481,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
             savedProgram.count++;
         }
         logf("[SEQ] Saved via MQTT (%d steps)", savedProgram.count);
+        sequenceSave();
         publishSavedSequence();
         return;
     }
@@ -412,6 +516,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         for (int d = 0; d < 7; d++) dailySched.days[d] = (ds[d] != '-');
         dailySched.firedToday = false;
         logf("[SCHED] Set: %s enabled=%s", ts.c_str(), dailySched.enabled ? "yes" : "no");
+        scheduleSave();
         return;
     }
 
@@ -484,6 +589,20 @@ void connectMqtt() {
     if (ok) {
         logf("[MQTT] Connected OK");
         mqtt.publish(lwt.c_str(), "online", true);
+
+        // Clear any retained messages on command topics — these should never be retained
+        // because the broker replays them on every reconnect causing duplicate execution
+        const char* clearTopics[] = {
+            "/zone/1/set", "/zone/2/set", "/zone/3/set", "/zone/4/set",
+            "/zone/5/set", "/zone/6/set", "/zone/7/set", "/zone/8/set",
+            "/program/start", "/program/stop", "/program/set",
+            "/ap/set"
+        };
+        for (const char* t : clearTopics) {
+            mqtt.publish((String(MQTT_ROOT) + t).c_str(), "", true);  // empty retained = delete
+        }
+
+        mqtt.subscribe((String(MQTT_ROOT) + "/reboot").c_str());
         mqtt.subscribe((String(MQTT_ROOT) + "/zone/+/set").c_str());
         mqtt.subscribe((String(MQTT_ROOT) + "/zone/+/config").c_str());
         mqtt.subscribe((String(MQTT_ROOT) + "/program/start").c_str());
@@ -521,8 +640,12 @@ void runSchedule() {
         && h == dailySched.hour
         && m == dailySched.minute) {
         dailySched.firedToday = true;
-        logf("[SCHED] Daily trigger — starting full cycle");
-        startFullCycle();
+        if (savedProgram.count > 0) {
+            logf("[SCHED] Daily trigger — starting saved sequence (%d zones)", savedProgram.count);
+            startProgram(savedProgram);
+        } else {
+            logf("[SCHED] Daily trigger — no sequence configured, skipping");
+        }
     }
 }
 
@@ -566,7 +689,9 @@ void setup() {
     mqtt.setCallback(mqttCallback);
     mqtt.setBufferSize(1024);
 
-    wifiCredsLoad();   // load stored WiFi credentials (overrides config.h if set)
+    wifiCredsLoad();
+    sequenceLoad();
+    scheduleLoad();
     connectWifi();
     connectMqtt();
 

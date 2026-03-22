@@ -75,30 +75,6 @@
   .zone-btn-row { display:flex; gap:6px; width:100%; }
   .zone-btn-row .btn { flex:1; padding:5px 0; font-size:.72rem; }
 
-  /* ── Sequence editor ──────────────────────────────────────────────────── */
-  .seq-panel { background:var(--panel); border:1px solid var(--border); border-radius:8px; overflow:hidden; }
-  .seq-header { padding:14px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
-  .seq-list { padding:8px 0; }
-  .seq-row { display:grid; grid-template-columns:28px 1fr 90px 36px 36px; align-items:center; gap:10px; padding:8px 16px; border-bottom:1px solid rgba(30,45,61,.5); transition:background .15s; }
-  .seq-row:last-child { border-bottom:none; }
-  .seq-row.disabled { opacity:.4; }
-  .seq-row.seq-active { background:rgba(0,255,136,.05); }
-
-  .seq-handle { font-family:var(--mono); font-size:.8rem; color:var(--dim); text-align:center; }
-  .seq-zone-info { display:flex; align-items:center; gap:10px; }
-  .seq-badge { width:28px; height:28px; border-radius:6px; background:rgba(0,212,255,.1); border:1px solid rgba(0,212,255,.2); display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-size:.82rem; color:var(--accent); flex-shrink:0; }
-  .seq-row.seq-active .seq-badge { background:rgba(0,255,136,.15); border-color:rgba(0,255,136,.4); color:var(--green); }
-  .seq-name { font-size:.85rem; color:var(--text); font-weight:600; }
-  .seq-dur-wrap { display:flex; align-items:center; gap:5px; }
-  .seq-dur-input { width:52px; background:#0d1520; border:1px solid var(--border); border-radius:4px; color:var(--text); font-family:var(--mono); font-size:.82rem; padding:4px 6px; text-align:right; outline:none; }
-  .seq-dur-input:focus { border-color:var(--accent); }
-  .seq-dur-unit { font-family:var(--mono); font-size:.68rem; color:#8aabbb; }
-  .seq-arrow { background:none; border:1px solid var(--border); border-radius:4px; color:var(--dim); cursor:pointer; width:30px; height:30px; display:flex; align-items:center; justify-content:center; font-size:.85rem; transition:all .15s; }
-  .seq-arrow:hover { color:var(--text); border-color:#8aabbb; }
-  .seq-check { width:16px; height:16px; cursor:pointer; accent-color:var(--accent); }
-  .seq-footer { padding:12px 16px; border-top:1px solid var(--border); display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
-  .seq-summary { font-family:var(--mono); font-size:.72rem; color:#8aabbb; }
-
   /* ── Schedule ─────────────────────────────────────────────────────────── */
   .sched-panel { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:16px 20px; display:flex; align-items:center; gap:20px; flex-wrap:wrap; }
   .sched-info { flex:1; font-family:var(--mono); font-size:.82rem; }
@@ -109,7 +85,8 @@
 
   /* ── Log ──────────────────────────────────────────────────────────────── */
   .log-section { display:flex; flex-direction:column; }
-  #log { background:#0d1520; border:1px solid var(--border); border-radius:6px; padding:14px; font-family:var(--mono); font-size:.72rem; line-height:1.7; color:#8aabbb; overflow-y:auto; height:200px; white-space:pre-wrap; word-break:break-all; }
+  #log { background:#0d1520; border:1px solid var(--border); border-radius:6px; padding:14px; font-family:var(--mono); font-size:.72rem; line-height:1.9; color:#8aabbb; overflow-y:auto; height:200px; white-space:pre-wrap; word-break:break-all; }
+  #log span { display:block; padding:1px 0; border-bottom:1px solid rgba(42,61,82,.4); }
   #log .log-irr   { color:var(--green); }
   #log .log-mqtt  { color:var(--accent); }
   #log .log-wifi  { color:var(--yellow); }
@@ -154,8 +131,7 @@
         <div class="progress-bg"><div class="progress-fill" id="prog-fill" style="width:0%"></div></div>
       </div>
       <div class="prog-btns">
-        <button class="btn btn-blue"  onclick="programStart()">▶ FULL CYCLE</button>
-        <button class="btn btn-accent" onclick="runSequence()">▶ SEQUENCE</button>
+        <button class="btn btn-accent" onclick="runSequence()">▶ RUN SEQUENCE</button>
         <button class="btn btn-stop"  onclick="programStop()">■ STOP</button>
       </div>
     </div>
@@ -167,23 +143,16 @@
     <div class="zone-grid" id="zone-grid"></div>
   </div>
 
-  <!-- Sequence editor -->
+  <!-- Saved sequence display -->
   <div>
-    <h2>// sequence editor</h2>
-    <div class="seq-panel">
-      <div class="seq-header">
-        <span style="font-family:var(--mono);font-size:.75rem;color:var(--dim)">
-          Drag to reorder &nbsp;·&nbsp; uncheck to skip &nbsp;·&nbsp; set duration per zone
-        </span>
-        <button class="btn btn-dim" onclick="resetSequence()" style="padding:5px 12px;font-size:.75rem">RESET</button>
+    <h2>// saved sequence</h2>
+    <div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px 20px;">
+      <div id="seq-display" style="font-family:var(--mono);font-size:.8rem;color:var(--text);line-height:2;">
+        <span style="color:var(--dim)">No sequence configured — send via MQTT sequence/set</span>
       </div>
-      <div class="seq-list" id="seq-list"></div>
-      <div class="seq-footer">
-        <span class="seq-summary" id="seq-summary">— min total</span>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-accent" onclick="runSequence()">▶ RUN NOW</button>
-          <button class="btn btn-blue"   onclick="saveSequenceSchedule()">SAVE TO SCHEDULE</button>
-        </div>
+      <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+        <span id="seq-total" style="font-family:var(--mono);font-size:.72rem;color:var(--dim)"></span>
+        <button class="btn btn-accent" onclick="runSequence()">▶ RUN NOW</button>
       </div>
     </div>
   </div>
@@ -216,21 +185,18 @@
 
 <footer>
   <a href="/update">OTA update</a>
+  <span style="color:var(--border)">|</span>
+  <a href="/wifi">WiFi settings</a>
   <span class="ip-badge" id="ip-badge">IP: ...</span>
 </footer>
 
 <script>
-// ── Sequence state (editor) ─────────────────────────────────────────────────
-// Each entry: { zone: 1-8, name: str, enabled: bool, duration: int (min) }
-let sequence = Array.from({length:8}, (_,i) => ({
-  zone: i+1, name: 'Zone '+(i+1), enabled: true, duration: 10
-}));
-
-let apState  = false;
+// ── State ────────────────────────────────────────────────────────────────────
 let logSeq   = 0;
-let zoneData = [];  // from /api/state
+let apState  = false;
+let zoneData = [];
 
-// ── Build zone status grid ──────────────────────────────────────────────────
+// ── Build zone status grid ───────────────────────────────────────────────────
 const grid = document.getElementById('zone-grid');
 for (let i = 0; i < 8; i++) {
   grid.innerHTML += `
@@ -246,157 +212,58 @@ for (let i = 0; i < 8; i++) {
     </div>`;
 }
 
-// ── Render sequence editor ──────────────────────────────────────────────────
-function renderSequence() {
-  const list = document.getElementById('seq-list');
-  list.innerHTML = '';
-
-  sequence.forEach((entry, idx) => {
-    const isFirst = idx === 0;
-    const isLast  = idx === sequence.length - 1;
-    const row = document.createElement('div');
-    row.className = 'seq-row' + (entry.enabled ? '' : ' disabled');
-    row.setAttribute('data-idx', idx);
-
-    row.innerHTML = `
-      <div class="seq-handle">${idx+1}</div>
-      <div class="seq-zone-info">
-        <div class="seq-badge">${entry.zone}</div>
-        <div class="seq-name">${entry.name}</div>
-      </div>
-      <div class="seq-dur-wrap">
-        <input class="seq-dur-input" type="number" min="1" max="120" value="${entry.duration}"
-          oninput="setDuration(${idx}, this.value)">
-        <span class="seq-dur-unit">min</span>
-      </div>
-      <button class="seq-arrow" onclick="moveUp(${idx})"   ${isFirst ? 'disabled style="opacity:.2"' : ''}>▲</button>
-      <button class="seq-arrow" onclick="moveDown(${idx})" ${isLast  ? 'disabled style="opacity:.2"' : ''}>▼</button>
-    `;
-
-    // Checkbox overlaid on the badge
-    const chk = document.createElement('input');
-    chk.type      = 'checkbox';
-    chk.className = 'seq-check';
-    chk.checked   = entry.enabled;
-    chk.title     = 'Enable/disable this zone';
-    chk.style.cssText = 'position:absolute;top:10px;right:10px';
-    chk.onchange  = () => { sequence[idx].enabled = chk.checked; renderSequence(); };
-    // Put checkbox in its own cell instead
-    row.style.gridTemplateColumns = '28px 1fr 90px 36px 36px 24px';
-    row.innerHTML += `<input class="seq-check" type="checkbox" ${entry.enabled?'checked':''} title="Skip zone" onchange="toggleZone(${idx},this.checked)">`;
-
-    list.appendChild(row);
-  });
-
-  updateSummary();
-}
-
-function toggleZone(idx, checked) {
-  sequence[idx].enabled = checked;
-  renderSequence();
-}
-function setDuration(idx, val) {
-  const v = parseInt(val);
-  if (!isNaN(v) && v >= 1) {
-    sequence[idx].duration = v;
-    updateSummary();
+// ── Sequence display ─────────────────────────────────────────────────────────
+function renderSavedSequence(seq) {
+  const el    = document.getElementById('seq-display');
+  const total = document.getElementById('seq-total');
+  if (!seq || seq.length === 0) {
+    el.innerHTML = '<span style="color:var(--dim)">No sequence configured — send via MQTT sequence/set</span>';
+    total.textContent = '';
+    return;
   }
-}
-function moveUp(idx) {
-  if (idx === 0) return;
-  [sequence[idx-1], sequence[idx]] = [sequence[idx], sequence[idx-1]];
-  renderSequence();
-}
-function moveDown(idx) {
-  if (idx === sequence.length-1) return;
-  [sequence[idx], sequence[idx+1]] = [sequence[idx+1], sequence[idx]];
-  renderSequence();
-}
-function resetSequence() {
-  sequence = zoneData.length ? zoneData.map(z => ({
-    zone: z.id, name: z.name, enabled: true, duration: z.duration
-  })) : Array.from({length:8}, (_,i) => ({
-    zone: i+1, name: 'Zone '+(i+1), enabled: true, duration: 10
-  }));
-  renderSequence();
-}
-function updateSummary() {
-  const active = sequence.filter(e => e.enabled);
-  const total  = active.reduce((s,e) => s + e.duration, 0);
-  const h = Math.floor(total/60), m = total%60;
-  const timeStr = h > 0 ? `${h}h ${m}min` : `${m} min`;
-  document.getElementById('seq-summary').textContent =
-    `${active.length} zones active · ${timeStr} total`;
+  el.innerHTML = seq.map((s, i) =>
+    `<div style="display:flex;gap:12px;align-items:center;padding:3px 0;border-bottom:1px solid rgba(42,61,82,.4)">
+      <span style="color:var(--dim);font-size:.68rem;min-width:20px">${i+1}.</span>
+      <span style="color:var(--accent);min-width:20px">${s.zone}</span>
+      <span style="flex:1;color:var(--text)">${s.name||('Zone '+s.zone)}</span>
+      <span style="color:var(--green)">${s.duration} min</span>
+    </div>`
+  ).join('');
+  const totalMin = seq.reduce((s,e) => s+e.duration, 0);
+  const h = Math.floor(totalMin/60), m = totalMin%60;
+  total.textContent = seq.length + ' zones · ' + (h > 0 ? h+'h '+m+'min' : m+' min') + ' total';
 }
 
-// ── Run sequence ────────────────────────────────────────────────────────────
-function buildPayload() {
-  return sequence
-    .filter(e => e.enabled)
-    .map(e => ({ zone: e.zone, duration: e.duration }));
-}
-
-function runSequence() {
-  const payload = buildPayload();
-  if (payload.length === 0) return;
-  fetch('/api/program/set', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(payload)
-  }).then(() => pollState());
-}
-
-function saveSequenceSchedule() {
-  // Saves the current sequence as the custom program that will
-  // run when the daily schedule fires — sends it to the board.
-  const payload = buildPayload();
-  fetch('/api/sequence/save', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(payload)
-  }).then(r => r.json()).then(() => {
-    const btn = event.target;
-    btn.textContent = '✓ SAVED';
-    setTimeout(() => btn.textContent = 'SAVE TO SCHEDULE', 1500);
-  });
-}
-
-// ── Program control ─────────────────────────────────────────────────────────
+// ── API calls ────────────────────────────────────────────────────────────────
 function zoneStart(n) {
-  // Look up the duration for this zone from the sequence editor
-  const entry = sequence.find(e => e.zone === n);
-  const dur   = entry ? entry.duration : 0;
+  const entry = (zoneData[n-1] || {});
+  const dur   = entry.duration || 0;
   fetch('/api/zone/start?n='+n+'&duration='+dur, {method:'POST'}).then(()=>pollState());
 }
-function programStart() {
+function runSequence() {
   fetch('/api/program/start', {method:'POST'}).then(()=>pollState());
 }
 function programStop() {
   fetch('/api/program/stop', {method:'POST'}).then(()=>pollState());
 }
 function toggleAP() {
-  fetch('/ap?action='+(apState?'OFF':'ON'))
-    .then(r=>r.json()).then(d=>{ apState=d.active; });
+  fetch('/ap?action='+(apState?'OFF':'ON')).then(r=>r.json()).then(d=>{ apState=d.active; });
 }
 
-// ── State polling ────────────────────────────────────────────────────────────
+// ── State polling ─────────────────────────────────────────────────────────────
 function pollState() {
   fetch('/api/state').then(r=>r.json()).then(d=>{
 
-    // Update zone cards
+    // Zone cards
     zoneData = d.zones || [];
     zoneData.forEach((z,i)=>{
       const active = z.state === 'ON';
       document.getElementById('zc'+i).className = 'zone-card'+(active?' active':'');
       document.getElementById('zn'+i).textContent = z.name||('Zone '+(i+1));
-      // Show actual running duration if this zone is currently active
-      const isActive = z.state === 'ON' && d.program_running && d.active_zone === i+1;
+      const isActive = active && d.program_running && d.active_zone === i+1;
       const dispDur  = isActive && d.step_duration_sec
                        ? Math.round(d.step_duration_sec/60) : z.duration;
       document.getElementById('zd'+i).textContent = dispDur+' min';
-      // Sync names into sequence editor
-      if (sequence[i] && sequence[i].zone === i+1)
-        sequence[i].name = z.name||('Zone '+(i+1));
     });
 
     // Program bar
@@ -407,41 +274,29 @@ function pollState() {
     const sub   = document.getElementById('prog-sub');
     const track = document.getElementById('prog-track');
     const fill  = document.getElementById('prog-fill');
-
     if (running) {
       const az   = zoneData[d.active_zone-1];
       const name = az ? az.name : ('Zone '+d.active_zone);
-      // Use actual step duration from firmware, not zone config default
       const dur  = d.step_duration_sec || (az ? az.duration*60 : 0);
       const pct  = dur>0 ? Math.min(100,(d.elapsed_sec/dur)*100) : 0;
       const rs   = d.remaining_sec||0;
       const rem  = Math.floor(rs/60)+'m '+(rs%60)+'s left';
-      bar.className    = 'prog-bar running';
+      bar.className     = 'prog-bar running';
       title.textContent = 'RUNNING'; title.className = 'prog-title running';
       zone.textContent  = name;      zone.className  = 'prog-zone running';
       sub.textContent   = rem;
       track.style.display = '';
       fill.style.width    = pct+'%';
     } else {
-      bar.className    = 'prog-bar';
+      bar.className     = 'prog-bar';
       title.textContent = 'IDLE'; title.className = 'prog-title';
       zone.textContent  = '—';   zone.className  = 'prog-zone';
       sub.textContent   = '';
       track.style.display = 'none';
     }
 
-    // Highlight active row in sequence editor
-    document.querySelectorAll('.seq-row').forEach(r => r.classList.remove('seq-active'));
-    if (running && d.active_zone) {
-      const activeRow = document.querySelector(`.seq-row[data-idx]`);
-      // find by zone number
-      sequence.forEach((e,i) => {
-        if (e.zone === d.active_zone) {
-          const r = document.querySelector(`.seq-row[data-idx="${i}"]`);
-          if (r) r.classList.add('seq-active');
-        }
-      });
-    }
+    // Saved sequence display
+    renderSavedSequence(d.sequence);
 
     // Schedule
     if (d.schedule) {
@@ -464,31 +319,10 @@ function pollState() {
     document.getElementById('ap-lbl').textContent = d.ap?('AP:'+d.ap_ssid):'AP OFF';
     if (d.ip) document.getElementById('ip-badge').textContent = 'IP: '+d.ip;
 
-    // Sync sequence editor if server state differs (MQTT change from another client)
-    if (d.sequence && d.sequence.length > 0) {
-      const sv = d.sequence;
-      const same = sv.length === sequence.length &&
-        sv.every((s,i) => s.zone === sequence[i].zone && s.duration === sequence[i].duration);
-      if (!same) {
-        sequence = sv.map(s => ({
-          zone: s.zone, name: s.name||('Zone '+s.zone),
-          enabled: s.enabled !== false, duration: s.duration
-        }));
-      } else {
-        sequence.forEach((e,i) => { if (sv[i]) e.name = sv[i].name||e.name; });
-      }
-    }
-
-    // Only re-render sequence editor if no duration input is focused
-    // (avoids wiping a value the user is currently typing)
-    const focused = document.activeElement;
-    if (!focused || !focused.classList.contains('seq-dur-input')) {
-      renderSequence();
-    }
   }).catch(()=>{});
 }
 
-// ── Log polling ──────────────────────────────────────────────────────────────
+// ── Log polling ───────────────────────────────────────────────────────────────
 function pollLog() {
   fetch('/api/log?since='+logSeq).then(r=>r.json()).then(d=>{
     if (!d.lines||d.lines.length===0) return;
@@ -497,8 +331,7 @@ function pollLog() {
       logSeq++;
       const span = document.createElement('span');
       span.className  = classifyLine(line);
-      span.textContent = line+'\
-';
+      span.textContent = line+'\n';
       el.appendChild(span);
     });
     if (document.getElementById('autoscroll').checked)
@@ -519,8 +352,7 @@ function clearLog() {
   fetch('/api/log/clear');
 }
 
-// ── Init ─────────────────────────────────────────────────────────────────────
-renderSequence();
+// ── Init ──────────────────────────────────────────────────────────────────────
 pollState();
 pollLog();
 setInterval(pollState, 2000);

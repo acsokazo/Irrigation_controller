@@ -55,7 +55,6 @@ struct IrrigProgram {
 };
 extern IrrigProgram activeProgram;
 extern void startZone(int idx, uint16_t durationMin);
-extern void startFullCycle();
 extern void stopProgram();
 extern void startProgram(const IrrigProgram& prog);
 extern IrrigProgram savedProgram;
@@ -225,10 +224,16 @@ static void handleZoneStop() {
     webServer.send(200, "application/json", "{\"ok\":true}");
 }
 
-// POST /api/program/start
+// POST /api/program/start — run saved sequence
 static void handleProgramStart() {
-    startFullCycle();
-    webServer.send(200, "application/json", "{\"ok\":true}");
+    if (savedProgram.count > 0) {
+        startProgram(savedProgram);
+        webServer.send(200, "application/json",
+            "{\"ok\":true,\"steps\":" + String(savedProgram.count) + "}");
+    } else {
+        webServer.send(400, "application/json",
+            "{\"error\":\"no sequence configured\"}");
+    }
 }
 
 // POST /api/program/stop
@@ -261,29 +266,6 @@ static void handleProgramSet() {
     } else {
         webServer.send(400, "application/json", "{\"error\":\"empty sequence\"}");
     }
-}
-
-// POST /api/sequence/save — saves sequence as the stored custom program
-// (same format, just persists it for later use with /api/program/start-custom)
-static void handleSequenceSave() {
-    JsonDocument doc;
-    if (deserializeJson(doc, webServer.arg("plain"))) {
-        webServer.send(400, "application/json", "{\"error\":\"invalid JSON\"}");
-        return;
-    }
-    savedProgram.count = 0;
-    for (JsonObject e : doc.as<JsonArray>()) {
-        if (savedProgram.count >= NUM_ZONES) break;
-        int z = (int)e["zone"] - 1;
-        if (z < 0 || z >= NUM_ZONES) continue;
-        savedProgram.zones[savedProgram.count]     = z;
-        savedProgram.durations[savedProgram.count] = e["duration"] | 0;
-        savedProgram.count++;
-    }
-    logf("[SEQ] Saved custom sequence (%d steps)", savedProgram.count);
-    publishSavedSequence();   // broadcast to MQTT so other clients sync
-    webServer.send(200, "application/json",
-        "{\"ok\":true,\"steps\":" + String(savedProgram.count) + "}");
 }
 
 // GET /ap?action=ON|OFF
@@ -381,7 +363,6 @@ void setupWebServer() {
     webServer.on("/api/program/start",   HTTP_POST, handleProgramStart);
     webServer.on("/api/program/stop",    HTTP_POST, handleProgramStop);
     webServer.on("/api/program/set",     HTTP_POST, handleProgramSet);
-    webServer.on("/api/sequence/save",   HTTP_POST, handleSequenceSave);
     webServer.on("/api/zone/start",      HTTP_POST, handleZoneStart);
     webServer.on("/api/zone/stop",       HTTP_POST, handleZoneStop);
     webServer.on("/wifi",                HTTP_GET,  handleWifiGet);

@@ -1,5 +1,6 @@
 # Secret config — never commit
 include/config.h
+secrets.ini
 
 # PlatformIO
 .pio/
