@@ -25,14 +25,15 @@
 #include <WiFiUdp.h>
 #include "config.h"
 #include "web_ui.h"
+#include "relays.h"
+
+String inputTopic(int idx) {
+    return String(MQTT_ROOT) + "/input/" + (idx + 1) + "/state";
+}
 
 // ─────────────────────────────────────────────
-//  Hardware
+//  Hardware (relay I/O moved to src/relays.*)
 // ─────────────────────────────────────────────
-#define PIN_LATCH    25
-#define PIN_CLOCK    26
-#define PIN_DATA     33
-#define PIN_OE       13
 
 extern const int8_t INPUT_PINS[8] = {36, 39, 34, 35, 4, 16, 17, 5};
 #define INPUTS_ENABLED true
@@ -43,24 +44,6 @@ extern const int8_t INPUT_PINS[8] = {36, 39, 34, 35, 4, 16, 17, 5};
 #define NUM_ZONES         8
 #define NTP_SERVER        "pool.ntp.org"
 #define DEFAULT_DURATION  10    // minutes per zone if not configured
-
-// Optional relay feedback pins. Define RELAY_FEEDBACK_PIN_LIST in config.h
-// if your board has wired relay output sensing lines. Use -1 for unused
-// channels. If feedback is not configured, writeRelays() will simply send
-// the shift register data without runtime verification.
-#ifdef RELAY_FEEDBACK_PIN_LIST
-const int relayFeedbackPins[NUM_ZONES] = RELAY_FEEDBACK_PIN_LIST;
-#else
-const int relayFeedbackPins[NUM_ZONES] = {-1, -1, -1, -1, -1, -1, -1, -1};
-#endif
-
-#ifndef RELAY_FEEDBACK_ACTIVE_HIGH
-#define RELAY_FEEDBACK_ACTIVE_HIGH 1
-#endif
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Serial log ring buffer
-// ─────────────────────────────────────────────────────────────────────────────
 
 String logLines[LOG_BUFFER_LINES];
 int    logHead  = 0;
@@ -90,9 +73,6 @@ WiFiClient   wifiClient;
 PubSubClient mqtt(wifiClient);
 WiFiUDP      ntpUDP;
 NTPClient    ntp(ntpUDP, NTP_SERVER, NTP_UTC_OFFSET, 60000);
-
-// ── Shift register ────────────────────────────────────────────────────────────
-uint8_t relayBits = 0x00;
 
 // ── Zone configuration ────────────────────────────────────────────────────────
 uint16_t zoneDuration[NUM_ZONES];    // minutes per zone
@@ -266,108 +246,7 @@ void publishApState() {
                      apActive ? "ON" : "OFF", true);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Shift register
-// ─────────────────────────────────────────────────────────────────────────────
-
-static bool hasRelayFeedback() {
-    for (int i = 0; i < NUM_ZONES; i++) {
-        if (relayFeedbackPins[i] >= 0) return true;
-    }
-    return false;
-}
-
-static bool verifyRelayOutputs() {
-    bool ok = true;
-    for (int i = 0; i < NUM_ZONES; i++) {
-        int pin = relayFeedbackPins[i];
-        if (pin < 0) continue;
-        bool expected = getRelay(i);
-        bool actual = (digitalRead(pin) == (RELAY_FEEDBACK_ACTIVE_HIGH ? HIGH : LOW));
-        if (expected != actual) {
-            logf("[HW] Relay %d mismatch expected=%s actual=%s",
-                 i + 1,
-                 expected ? "ON" : "OFF",
-                 actual   ? "ON" : "OFF");
-            ok = false;
-        }
-    }
-    return ok;
-}
-
-static void writeRelaysOnce() {
-    digitalWrite(PIN_LATCH, LOW);
-    shiftOut(PIN_DATA, PIN_CLOCK, MSBFIRST, ~relayBits);
-    digitalWrite(PIN_LATCH, HIGH);
-}
-
-void writeRelays() {
-    writeRelaysOnce();
-    if (!hasRelayFeedback()) return;
-
-    if (verifyRelayOutputs()) return;
-
-    logf("[HW] Relay output mismatch detected, retrying");
-
-    const int MAX_ATTEMPTS = 3;
-    const unsigned long RETRY_MS = 1000; // 1000 ms between attempts
-
-    for (int attempt = 1; attempt <= MAX_ATTEMPTS; ++attempt) {
-        delay(RETRY_MS);
-        writeRelaysOnce();
-        if (verifyRelayOutputs()) {
-            logf("[HW] Relay output recovered after %d attempt(s)", attempt);
-            return;
-        } else {
-            logf("[HW] Relay output still mismatch after %d attempt(s)", attempt);
-        }
-    }
-
-    // After retries exhausted, publish fatal status if possible and restart
-    logf("[HW] Relay outputs failed after %d attempts — restarting", MAX_ATTEMPTS);
-    if (mqtt.connected()) {
-        mqtt.publish((String(MQTT_ROOT) + "/status").c_str(), "fatal:relay_stuck", true);
-        mqtt.loop();
-    }
-    delay(200);
-    ESP.restart();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Zone / relay helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-String zoneTopic(int idx, const char* suffix) {
-    return String(MQTT_ROOT) + "/zone/" + (idx + 1) + "/" + suffix;
-}
-String inputTopic(int idx) {
-    return String(MQTT_ROOT) + "/input/" + (idx + 1) + "/state";
-}
-bool getRelay(int idx) { return (relayBits >> idx) & 0x01; }
-
-void setRelay(int idx, bool on, uint32_t pulse = 0) {
-    if (idx < 0 || idx > 7) return;
-    if (on) relayBits |=  (1 << idx);
-    else    relayBits &= ~(1 << idx);
-    writeRelays();
-}
-
-void allRelaysOff() {
-    relayBits = 0x00;
-    writeRelays();
-}
-
-void publishRelayState(int idx) {
-    if (!mqtt.connected()) return;
-    bool on = getRelay(idx);
-    logf("[PUB] zone/%d/state → %s  (stack hint: check log above)", idx+1, on?"ON":"OFF");
-    mqtt.publish(zoneTopic(idx, "state").c_str(), on ? "ON" : "OFF", true);
-}
-
-void publishAllZoneStates() {
-    logf("[PUB] publishAllZoneStates called");
-    for (int i = 0; i < NUM_ZONES; i++) publishRelayState(i);
-}
+// Relay implementation moved to src/relays.cpp
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Irrigation sequencer
@@ -836,14 +715,7 @@ void setup() {
         logf("[OK] Digital inputs configured");
     }
 
-    if (hasRelayFeedback()) {
-        for (int i = 0; i < NUM_ZONES; i++) {
-            if (relayFeedbackPins[i] >= 0) {
-                pinMode(relayFeedbackPins[i], INPUT);
-            }
-        }
-        logf("[OK] Relay feedback inputs configured");
-    }
+    relaysInit();
 
     mqtt.setServer(MQTT_BROKER, MQTT_PORT);
     mqtt.setCallback(mqttCallback);
