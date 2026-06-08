@@ -18,6 +18,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <Preferences.h>
+#include <ArduinoOTA.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <NTPClient.h>
@@ -303,6 +304,7 @@ void publishAllZoneStates() {
 
 void publishProgramState();   // forward declaration
 void publishSavedSequence();  // forward declaration
+void publishScheduleState();  // forward declaration
 void startNextZone();         // forward declaration
 
 void stopProgram() {
@@ -429,8 +431,6 @@ void publishProgramState() {
 
 void publishSavedSequence() {
     if (!mqtt.connected()) return;
-    // Publish full sequence as JSON array to sequence/state (retained)
-    // Format: [{"zone":1,"duration":10,"name":"Zone 1"}, ...]
     JsonDocument doc;
     JsonArray arr = doc.to<JsonArray>();
     for (int i = 0; i < savedProgram.count; i++) {
@@ -445,6 +445,23 @@ void publishSavedSequence() {
     String out;
     serializeJson(doc, out);
     mqtt.publish((String(MQTT_ROOT) + "/sequence/state").c_str(), out.c_str(), true);
+}
+
+void publishScheduleState() {
+    if (!mqtt.connected()) return;
+    JsonDocument doc;
+    doc["enabled"] = dailySched.enabled;
+    char timeStr[6];
+    snprintf(timeStr, sizeof(timeStr), "%02d:%02d", dailySched.hour, dailySched.minute);
+    doc["time"] = timeStr;
+    // Build days string: MTWTFSS, '-' for disabled days
+    const char dayChars[] = "MTWTFSS";
+    char days[8] = {0};
+    for (int d = 0; d < 7; d++) days[d] = dailySched.days[d] ? dayChars[d] : '-';
+    doc["days"] = days;
+    String out;
+    serializeJson(doc, out);
+    mqtt.publish((String(MQTT_ROOT) + "/schedule/state").c_str(), out.c_str(), true);
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -566,6 +583,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         dailySched.firedToday = false;
         logf("[SCHED] Set: %s enabled=%s", ts.c_str(), dailySched.enabled ? "yes" : "no");
         scheduleSave();
+        publishScheduleState();
         return;
     }
 
@@ -620,8 +638,17 @@ void connectWifi() {
     if (WiFi.status() == WL_CONNECTED) {
         logf("[WiFi] Connected. IP: %s", WiFi.localIP().toString().c_str());
         ntp.begin();
-        setupOTA();
-        setupWebServer();
+        // Only initialise OTA and web server once — re-calling causes mDNS issues
+        static bool servicesStarted = false;
+        if (!servicesStarted) {
+            setupOTA();
+            setupWebServer();
+            servicesStarted = true;
+        } else {
+            // On reconnect, restart mDNS so .local resolves again
+            ArduinoOTA.begin();
+            logf("[OTA] mDNS restarted after reconnect");
+        }
         if (apActive) { logf("[AP] Restoring…"); apStart(); }
     } else {
         logf("[WiFi] Failed – retry in %ds", WIFI_RETRY_MS / 1000);
@@ -665,6 +692,7 @@ void connectMqtt() {
         publishApState();
         publishProgramState();
         publishSavedSequence();
+        publishScheduleState();
         mqtt.publish((String(MQTT_ROOT) + "/sequence/delay/state").c_str(),
                      String(sequenceDelaySec).c_str(), true);
     } else {
@@ -745,6 +773,7 @@ void setup() {
     sequenceLoad();
     scheduleLoad();
     connectWifi();
+    connectMqtt();
     connectMqtt();
 
     if (AP_DEFAULT) apStart();
