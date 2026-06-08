@@ -39,9 +39,16 @@ static bool verifyRelayOutputs() {
 }
 
 static void writeRelaysOnce() {
+#ifdef UNIT_TEST
+    (void)PIN_LATCH;
+    (void)PIN_CLOCK;
+    (void)PIN_DATA;
+    (void)relayBits;
+#else
     digitalWrite(PIN_LATCH, LOW);
     shiftOut(PIN_DATA, PIN_CLOCK, MSBFIRST, ~relayBits);
     digitalWrite(PIN_LATCH, HIGH);
+#endif
 }
 
 void writeRelays() {
@@ -107,10 +114,14 @@ void publishAllZoneStates() {
 }
 
 void relaysInit() {
+#ifdef UNIT_TEST
+    (void)relayFeedbackPins;
+#else
     if (hasRelayFeedback()) {
         for (int i = 0; i < NUM_ZONES; i++) {
             if (relayFeedbackPins[i] >= 0) pinMode(relayFeedbackPins[i], INPUT);
         }
         logf("[OK] Relay feedback inputs configured");
     }
+#endif
 }
