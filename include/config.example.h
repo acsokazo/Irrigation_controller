@@ -34,6 +34,13 @@
 #define AP_CHANNEL   1                   // WiFi channel (1-13)
 #define AP_DEFAULT   false               // true = AP on at boot, false = off at boot
 
+// Optional relay feedback pins.
+// Define these only if you have dedicated GPIO inputs wired to relay state
+// or contact sense lines. Leave undefined if your board has no feedback.
+// Example:
+// #define RELAY_FEEDBACK_PIN_LIST { 12, 13, 14, 15, 16, 17, 18, 19 }
+// #define RELAY_FEEDBACK_ACTIVE_HIGH 1
+
 // NTP timezone offset in seconds from UTC
 // UTC+1 (Hungary winter) = 3600
 // UTC+2 (Hungary summer) = 7200
